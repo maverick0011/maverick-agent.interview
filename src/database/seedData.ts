@@ -1,7 +1,7 @@
 import { ResumeProfile, KnowledgeDocument, InterviewSession, AppSettings } from '../types';
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  ollamaEndpoint: 'http://localhost:11434',
+  ollamaEndpoint: 'http://127.0.0.1:3001/ollama',
   primaryModel: 'qwen3:8b-q4_K_M',
   contextLength: 8192,
   temperature: 0.35,

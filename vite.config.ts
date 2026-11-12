@@ -5,6 +5,8 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    // Relative asset URLs work on GitHub Pages project sites and Electron file:// builds.
+    base: './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
