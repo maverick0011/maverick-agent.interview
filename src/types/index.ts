@@ -234,3 +234,48 @@ export interface AppSettings {
     clearTranscript: string;
   };
 }
+
+export type UserRole = 'admin' | 'student';
+
+export type PlatformOS = 'macos' | 'windows' | 'linux';
+
+export interface AccessRequest {
+  id: string;
+  fullName: string;
+  email: string;
+  targetRole: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  approvedAt?: string;
+  approvedBy?: string;
+}
+
+export interface UserProfile {
+  id: string;
+  fullName: string;
+  email: string;
+  role: UserRole;
+  isApproved: boolean;
+  avatarUrl?: string;
+}
+
+export interface ProctoredLiveFeed {
+  sessionId: string;
+  studentId: string;
+  studentName: string;
+  track: string;
+  difficulty: string;
+  startedAt: string;
+  currentQuestionIndex: number;
+  totalQuestions: number;
+  currentQuestion: string;
+  currentTranscript: string;
+  videoFrameDataUrl?: string;
+  isCameraActive: boolean;
+  isAudioActive: boolean;
+  status: 'live' | 'completed' | 'paused';
+  lastHeartbeat: string;
+}
+
+export * from '../features/mock-interview/types';

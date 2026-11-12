@@ -6,7 +6,13 @@ import {
   MockInterviewSession, 
   SystemDesignDiagram, 
   CodeAssistantSnippet,
-  AIResponse
+  AIResponse,
+  UserProfile,
+  AccessRequest,
+  ProctoredLiveFeed,
+  InterviewAttempt,
+  UserInterviewStatus,
+  InterviewSettings
 } from '../types';
 import { DEFAULT_SETTINGS, INITIAL_RESUME, INITIAL_KNOWLEDGE_DOCS, INITIAL_SESSIONS } from './seedData';
 
@@ -20,7 +26,106 @@ const STORAGE_KEYS = {
   SYSTEM_DESIGNS: 'maverick_designs_v1',
   CODE_SNIPPETS: 'maverick_code_v1',
   WIZARD_COMPLETED: 'maverick_wizard_done_v1',
+  CURRENT_USER: 'maverick_current_user_v1',
+  ACCESS_REQUESTS: 'maverick_access_requests_v1',
+  PROCTORED_FEEDS: 'maverick_proctored_feeds_v1',
+  INTERVIEW_ATTEMPTS: 'maverick_interview_attempts_v2',
+  USER_INTERVIEW_STATUS: 'maverick_user_interview_status_v2',
+  INTERVIEW_SETTINGS: 'maverick_interview_settings_v2',
+  USER_ACTIVITY_LOGS: 'maverick_user_activity_logs_v1',
 };
+
+export const ADMIN_EMAILS: string[] = [
+  'mavbharath01@gmail.com',
+  'bharath.hkumar51@gmail.com',
+  'admin@cloudnativeacademy.in',
+];
+
+export function isAdminEmail(email?: string): boolean {
+  if (!email) return false;
+  return ADMIN_EMAILS.some(admin => admin.toLowerCase() === email.trim().toLowerCase());
+}
+
+export interface UserActivityLog {
+  id: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  action: 'login' | 'mock_interview_start' | 'mock_interview_complete' | 'access_requested' | 'copilot_active';
+  description: string;
+  timestamp: string;
+}
+
+export const DEFAULT_ADMIN_USER: UserProfile = {
+  id: 'user-admin-bharath',
+  fullName: 'Bharath H Kumar',
+  email: 'mavbharath01@gmail.com',
+  role: 'admin',
+  isApproved: true,
+  avatarUrl: 'https://lh3.googleusercontent.com/a/default-user',
+};
+
+export const DEFAULT_STUDENT_USER: UserProfile = {
+  id: 'user-student-alex',
+  fullName: 'Alex Mercer',
+  email: 'alex.mercer@gmail.com',
+  role: 'student',
+  isApproved: true,
+  avatarUrl: 'https://lh3.googleusercontent.com/a/default-user',
+};
+
+const INITIAL_ACCESS_REQUESTS: AccessRequest[] = [
+  {
+    id: 'req-01',
+    fullName: 'Rahul Sharma',
+    email: 'rahul.sharma@gmail.com',
+    targetRole: 'DevOps Engineer',
+    reason: 'Enrolled in Cloud Native Academy Master Cohort 2026. Requesting mock interview simulator access.',
+    status: 'pending',
+    createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
+  },
+  {
+    id: 'req-02',
+    fullName: 'Priya Patel',
+    email: 'priya.patel@gmail.com',
+    targetRole: 'SRE & Kubernetes Architect',
+    reason: 'Prepping for Staff SRE interviews next week.',
+    status: 'approved',
+    createdAt: new Date(Date.now() - 86400000 * 1).toISOString(),
+    approvedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
+    approvedBy: 'mavbharath01@gmail.com',
+  },
+];
+
+const INITIAL_ACTIVITY_LOGS: UserActivityLog[] = [
+  {
+    id: 'act-01',
+    userId: 'user-student-alex',
+    userEmail: 'alex.mercer@gmail.com',
+    userName: 'Alex Mercer',
+    action: 'mock_interview_complete',
+    description: 'Completed DevOps Senior Mock Interview (Scored 88% - Passed)',
+    timestamp: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
+  },
+  {
+    id: 'act-02',
+    userId: 'user-sumanth',
+    userEmail: 'sumanth.rao@gmail.com',
+    userName: 'Sumanth Rao',
+    action: 'mock_interview_start',
+    description: 'Started Kubernetes Specialist Mock Interview (Live Video Active)',
+    timestamp: new Date(Date.now() - 1000 * 60 * 7).toISOString(),
+  },
+  {
+    id: 'act-03',
+    userId: 'user-priya',
+    userEmail: 'priya.patel@gmail.com',
+    userName: 'Priya Patel',
+    action: 'login',
+    description: 'Logged in via Google SSO (OAuth Verified)',
+    timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
+  },
+];
 
 class LocalStorageDB {
   private get<T>(key: string, defaultValue: T): T {
@@ -220,6 +325,200 @@ class LocalStorageDB {
     }
   }
 
+  // --- User Authentication & Access Control ---
+  getCurrentUser(): UserProfile {
+    return this.get<UserProfile>(STORAGE_KEYS.CURRENT_USER, DEFAULT_STUDENT_USER);
+  }
+
+  setCurrentUser(user: UserProfile): void {
+    this.set(STORAGE_KEYS.CURRENT_USER, user);
+  }
+
+  getAccessRequests(): AccessRequest[] {
+    return this.get<AccessRequest[]>(STORAGE_KEYS.ACCESS_REQUESTS, INITIAL_ACCESS_REQUESTS);
+  }
+
+  submitAccessRequest(data: Omit<AccessRequest, 'id' | 'createdAt' | 'status'>): AccessRequest {
+    const requests = this.getAccessRequests();
+    const newReq: AccessRequest = {
+      ...data,
+      id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    requests.unshift(newReq);
+    this.set(STORAGE_KEYS.ACCESS_REQUESTS, requests);
+    return newReq;
+  }
+
+  approveAccessRequest(id: string, approvedBy = 'mavbharath01@gmail.com'): void {
+    const requests = this.getAccessRequests();
+    const target = requests.find(r => r.id === id);
+    if (target) {
+      target.status = 'approved';
+      target.approvedAt = new Date().toISOString();
+      target.approvedBy = approvedBy;
+      this.set(STORAGE_KEYS.ACCESS_REQUESTS, requests);
+
+      // If current user is this requester, update their approved status
+      const currentUser = this.getCurrentUser();
+      if (currentUser.email.toLowerCase() === target.email.toLowerCase()) {
+        currentUser.isApproved = true;
+        this.setCurrentUser(currentUser);
+      }
+
+      this.logUserActivity({
+        userId: target.id,
+        userEmail: target.email,
+        userName: target.fullName,
+        action: 'access_requested',
+        description: `Login access approved by administrator ${approvedBy}`,
+      });
+    }
+  }
+
+  // --- User Activity Logging (Visible to mavbharath01@gmail.com) ---
+  getUserActivityLogs(): UserActivityLog[] {
+    return this.get<UserActivityLog[]>(STORAGE_KEYS.USER_ACTIVITY_LOGS, INITIAL_ACTIVITY_LOGS);
+  }
+
+  logUserActivity(log: Omit<UserActivityLog, 'id' | 'timestamp'>): void {
+    const logs = this.getUserActivityLogs();
+    const newLog: UserActivityLog = {
+      ...log,
+      id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      timestamp: new Date().toISOString(),
+    };
+    logs.unshift(newLog);
+    this.set(STORAGE_KEYS.USER_ACTIVITY_LOGS, logs.slice(0, 100)); // retain latest 100
+  }
+
+  rejectAccessRequest(id: string): void {
+    const requests = this.getAccessRequests();
+    const target = requests.find(r => r.id === id);
+    if (target) {
+      target.status = 'rejected';
+      this.set(STORAGE_KEYS.ACCESS_REQUESTS, requests);
+    }
+  }
+
+  // --- Proctored Live Feeds (For Admin Dashboard & Mock Interviews) ---
+  getProctoredFeeds(): ProctoredLiveFeed[] {
+    return this.get<ProctoredLiveFeed[]>(STORAGE_KEYS.PROCTORED_FEEDS, []);
+  }
+
+  updateProctoredFeed(feed: ProctoredLiveFeed): void {
+    const feeds = this.getProctoredFeeds();
+    const idx = feeds.findIndex(f => f.sessionId === feed.sessionId);
+    if (idx >= 0) {
+      feeds[idx] = feed;
+    } else {
+      feeds.unshift(feed);
+    }
+    this.set(STORAGE_KEYS.PROCTORED_FEEDS, feeds);
+  }
+
+  removeProctoredFeed(sessionId: string): void {
+    const feeds = this.getProctoredFeeds().filter(f => f.sessionId !== sessionId);
+    this.set(STORAGE_KEYS.PROCTORED_FEEDS, feeds);
+  }
+
+  // --- Mock Interview Attempts & Completion Rules ---
+  getInterviewAttempts(): InterviewAttempt[] {
+    return this.get<InterviewAttempt[]>(STORAGE_KEYS.INTERVIEW_ATTEMPTS, []);
+  }
+
+  saveInterviewAttempt(attempt: InterviewAttempt): void {
+    const attempts = this.getInterviewAttempts();
+    const idx = attempts.findIndex(a => a.id === attempt.id);
+    if (idx >= 0) {
+      attempts[idx] = attempt;
+    } else {
+      attempts.unshift(attempt);
+    }
+    this.set(STORAGE_KEYS.INTERVIEW_ATTEMPTS, attempts);
+
+    // Update user interview status (Pass threshold: 80%)
+    this.updateUserInterviewStatus(attempt);
+  }
+
+  getUserInterviewStatuses(): UserInterviewStatus[] {
+    return this.get<UserInterviewStatus[]>(STORAGE_KEYS.USER_INTERVIEW_STATUS, [
+      {
+        userId: 'user-student-alex',
+        topicSetKey: 'devops-senior-linux-docker-k8s',
+        status: 'Completed',
+        bestScore: 88,
+        latestScore: 88,
+        attemptCount: 2,
+        completedAt: new Date(Date.now() - 86400000).toISOString(),
+      },
+      {
+        userId: 'user-sumanth',
+        topicSetKey: 'sre-senior-aws-karpenter',
+        status: 'In Progress',
+        bestScore: 74,
+        latestScore: 74,
+        attemptCount: 1,
+      },
+    ]);
+  }
+
+  private updateUserInterviewStatus(attempt: InterviewAttempt): void {
+    const statuses = this.getUserInterviewStatuses();
+    const topicKey = `${attempt.track}-${attempt.seniority}-${attempt.selectedTopics.sort().join('-')}`;
+    let record = statuses.find(s => s.userId === attempt.userId && s.topicSetKey === topicKey);
+
+    const isPassedNow = attempt.overallScore >= 80;
+
+    if (!record) {
+      record = {
+        userId: attempt.userId,
+        topicSetKey: topicKey,
+        status: isPassedNow ? 'Completed' : 'In Progress',
+        bestScore: attempt.overallScore,
+        latestScore: attempt.overallScore,
+        attemptCount: 1,
+        completedAt: isPassedNow ? new Date().toISOString() : undefined,
+      };
+      statuses.unshift(record);
+    } else {
+      record.attemptCount++;
+      record.latestScore = attempt.overallScore;
+      record.bestScore = Math.max(record.bestScore, attempt.overallScore);
+
+      // Once marked COMPLETED, status must NOT be revoked by a later lower score!
+      if (isPassedNow && record.status !== 'Completed') {
+        record.status = 'Completed';
+        record.completedAt = new Date().toISOString();
+      }
+    }
+
+    this.set(STORAGE_KEYS.USER_INTERVIEW_STATUS, statuses);
+  }
+
+  getInterviewSettings(): InterviewSettings {
+    return this.get<InterviewSettings>(STORAGE_KEYS.INTERVIEW_SETTINGS, {
+      passThreshold: 80,
+      weights: {
+        answerQuality: 0.35,
+        communication: 0.20,
+        wordFormation: 0.15,
+        speakingStyle: 0.10,
+        posture: 0.20,
+      },
+      defaultQuestionsPerSession: 10,
+      defaultTimePerAnswerSec: 120,
+    });
+  }
+
+  updateInterviewSettings(settings: Partial<InterviewSettings>): InterviewSettings {
+    const current = this.getInterviewSettings();
+    const updated = { ...current, ...settings };
+    this.set(STORAGE_KEYS.INTERVIEW_SETTINGS, updated);
+    return updated;
+  }
+
   wipeAllData(): void {
     localStorage.removeItem(STORAGE_KEYS.SETTINGS);
     localStorage.removeItem(STORAGE_KEYS.RESUME);
@@ -230,6 +529,9 @@ class LocalStorageDB {
     localStorage.removeItem(STORAGE_KEYS.SYSTEM_DESIGNS);
     localStorage.removeItem(STORAGE_KEYS.CODE_SNIPPETS);
     localStorage.removeItem(STORAGE_KEYS.WIZARD_COMPLETED);
+    localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+    localStorage.removeItem(STORAGE_KEYS.ACCESS_REQUESTS);
+    localStorage.removeItem(STORAGE_KEYS.PROCTORED_FEEDS);
   }
 }
 

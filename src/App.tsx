@@ -19,12 +19,25 @@ import { MeetingHistoryPage } from './pages/MeetingHistoryPage';
 import { AIModelsPage } from './pages/AIModelsPage';
 import { SettingsPage } from './pages/SettingsPage';
 
+import { AuthModal } from './components/auth/AuthModal';
+import { AdminDashboardModal } from './components/admin/AdminDashboardModal';
+import { UserProfile } from './types';
+import { ShieldAlert, ArrowRight } from 'lucide-react';
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isFloatingOpen, setIsFloatingOpen] = useState(false);
   const [isDoctorOpen, setIsDoctorOpen] = useState(false);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState<UserProfile>(localStore.getCurrentUser());
   const [showWizard, setShowWizard] = useState(!localStore.isWizardCompleted());
+
+  // Listen for user changes or storage updates
+  const handleUserChanged = (updatedUser: UserProfile) => {
+    setCurrentUser(updatedUser);
+  };
 
   // Check if opened directly in floating route (e.g. hash #/floating in Electron secondary window)
   useEffect(() => {
@@ -53,13 +66,34 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-neutral-950 text-neutral-100 overflow-hidden font-sans">
-      {/* Native macOS Window TitleBar */}
+      {/* Native Window TitleBar */}
       <MacTitleBar
         onToggleFloating={() => setIsFloatingOpen(prev => !prev)}
         onOpenModelDoctor={() => setIsDoctorOpen(true)}
         onOpenWizard={() => setShowWizard(true)}
+        onOpenAuth={() => setIsAuthOpen(true)}
+        onOpenAdmin={() => setIsAdminOpen(true)}
         isFloatingOpen={isFloatingOpen}
+        currentUser={currentUser}
       />
+
+      {/* Account Pending Approval Banner if student is not approved */}
+      {!currentUser.isApproved && currentUser.role !== 'admin' && (
+        <div className="bg-amber-950/60 border-b border-amber-600/30 px-4 py-2 flex items-center justify-between text-xs text-amber-200">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Google SSO Access Pending:</strong> Your account <em>{currentUser.email}</em> is awaiting approval by administrator <strong className="text-white">mavbharath01@gmail.com</strong>.
+            </span>
+          </div>
+          <button
+            onClick={() => setIsAuthOpen(true)}
+            className="flex items-center gap-1 font-semibold text-amber-300 hover:text-white underline underline-offset-2 ml-4 shrink-0"
+          >
+            Google SSO Options <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Main Workspace Frame */}
       <div className="flex flex-1 overflow-hidden">
@@ -112,6 +146,19 @@ export default function App() {
       {showWizard && (
         <SetupWizard onComplete={() => setShowWizard(false)} />
       )}
+
+      {/* User Login & Access Request Modal */}
+      <AuthModal
+        isOpen={isAuthOpen}
+        onClose={() => setIsAuthOpen(false)}
+        onUserChanged={handleUserChanged}
+      />
+
+      {/* Admin Command Center (Candidate Approval & Live Proctored Feeds) */}
+      <AdminDashboardModal
+        isOpen={isAdminOpen}
+        onClose={() => setIsAdminOpen(false)}
+      />
     </div>
   );
 }

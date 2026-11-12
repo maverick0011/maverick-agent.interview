@@ -13,7 +13,24 @@
     "clean": "rm -rf dist electron/dist server.js",
     "lint": "tsc --noEmit",
     "electron:dev": "vite build && electron .",
-    "electron:build": "vite build && electron-builder --mac dmg --arm64"
+    "electron:build": "vite build && electron-builder --mac dmg --arm64",
+    "electron:build:mac": "vite build && electron-builder --mac dmg zip",
+    "electron:build:win": "vite build && electron-builder --win nsis portable",
+    "electron:build:all": "vite build && electron-builder --mac --win"
+  },
+  "build": {
+    "appId": "in.cloudnativeacademy.interview",
+    "productName": "Maverick AI - CloudNative Academy",
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": ["dmg", "zip"]
+    },
+    "win": {
+      "target": ["nsis", "portable"]
+    }
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
