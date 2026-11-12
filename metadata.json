@@ -1,0 +1,6 @@
+{
+  "name": "Maverick AI",
+  "description": "Private, local-first macOS AI interview assistant, real-time meeting copilot, technical interview prep platform, and intelligent desktop copilot powered by local Qwen3 8B Q4.",
+  "requestFramePermissions": ["microphone", "display-capture"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
