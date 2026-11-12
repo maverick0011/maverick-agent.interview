@@ -16,7 +16,9 @@
     "electron:build": "vite build && electron-builder --mac dmg --arm64",
     "electron:build:mac": "vite build && electron-builder --mac dmg zip",
     "electron:build:win": "vite build && electron-builder --win nsis portable",
-    "electron:build:all": "vite build && electron-builder --mac --win"
+    "electron:build:all": "vite build && electron-builder --mac --win",
+    "backend:dev": "tsx watch backend/src/server.ts",
+    "backend:start": "tsx backend/src/server.ts"
   },
   "build": {
     "appId": "in.cloudnativeacademy.interview",
@@ -26,10 +28,16 @@
     },
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "win": {
-      "target": ["nsis", "portable"]
+      "target": [
+        "nsis",
+        "portable"
+      ]
     }
   },
   "dependencies": {

@@ -148,7 +148,15 @@ class LocalStorageDB {
 
   // --- Settings ---
   getSettings(): AppSettings {
-    return this.get<AppSettings>(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+    const settings = this.get<AppSettings>(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+    // Migrate older direct-Ollama settings to the loopback-only local backend proxy.
+    if (settings.ollamaEndpoint === 'http://localhost:11434' ||
+        settings.ollamaEndpoint === 'http://127.0.0.1:11434') {
+      const migrated = { ...settings, ollamaEndpoint: 'http://127.0.0.1:3001/ollama' };
+      this.set(STORAGE_KEYS.SETTINGS, migrated);
+      return migrated;
+    }
+    return settings;
   }
 
   updateSettings(updates: Partial<AppSettings>): AppSettings {
