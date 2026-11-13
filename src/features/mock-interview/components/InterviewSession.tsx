@@ -33,6 +33,8 @@ import {
 import { useSpeechToText } from '../hooks/useSpeechToText';
 import { postureTracker, PostureFrameResult } from '../services/postureTracker';
 import { evaluatorClient } from '../services/evaluatorClient';
+import { localStore } from '../../../database/localStore';
+import { videoProctorService } from '../../../services/videoProctorService';
 
 interface InterviewSessionProps {
   config: InterviewSessionConfig;
@@ -53,13 +55,22 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
   onSessionComplete,
   onExit,
 }) => {
+  const interviewSettings = localStore.getInterviewSettings();
   const [currentIdx, setCurrentIdx] = useState(0);
   const [phase, setPhase] = useState<'thinking' | 'answering' | 'evaluating'>('thinking');
   const [thinkingSecondsLeft, setThinkingSecondsLeft] = useState(config.thinkingTimeSec || 10);
   const [answerSecondsLeft, setAnswerSecondsLeft] = useState(config.timePerAnswerSec || 120);
   const [isReadingAloud, setIsReadingAloud] = useState(false);
+  const [showFollowUp, setShowFollowUp] = useState(false);
   const [answers, setAnswers] = useState<AnswerRecord[]>([]);
   const [currentPostureFrame, setCurrentPostureFrame] = useState<PostureFrameResult | null>(null);
+  const [evaluatorError, setEvaluatorError] = useState<string | null>(null);
+  const [pendingEvalContext, setPendingEvalContext] = useState<{
+    isSkipped: boolean;
+    finalTranscript: string;
+    speechMetrics: ReturnType<typeof getSpeechMetrics>;
+    postureMetrics: ReturnType<typeof postureTracker.getSummaryMetrics>;
+  } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -70,10 +81,8 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
     transcript,
     setTranscript,
     isListening,
-    isSupported,
     wpm,
     fillerCount,
-    durationSec,
     startListening,
     stopListening,
     reset: resetSpeech,
@@ -90,7 +99,7 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
     }
 
     let isMounted = true;
-    let startSec = Date.now() / 1000;
+    const startSec = Date.now() / 1000;
     postureTracker.reset();
 
     const loop = () => {
@@ -115,11 +124,17 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
   useEffect(() => {
     if (!currentQuestion) return;
 
-    // Reset states for new question
     resetSpeech();
+    setShowFollowUp(false);
     setPhase('thinking');
     setThinkingSecondsLeft(config.thinkingTimeSec || 10);
     setAnswerSecondsLeft(config.timePerAnswerSec || 120);
+
+    videoProctorService.updateLiveTelemetry({
+      currentQuestionIndex: currentIdx,
+      currentQuestion: currentQuestion.question,
+      currentTranscript: 'Candidate preparing response...',
+    });
 
     if (config.readAloud && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
@@ -138,6 +153,15 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
     };
   }, [currentIdx, currentQuestion, config.readAloud, config.thinkingTimeSec, config.timePerAnswerSec]);
 
+  // Update live transcript telemetry periodically
+  useEffect(() => {
+    if (transcript.trim()) {
+      videoProctorService.updateLiveTelemetry({
+        currentTranscript: transcript.trim().slice(-500),
+      });
+    }
+  }, [transcript]);
+
   // 3. Thinking Timer Countdown
   useEffect(() => {
     if (phase !== 'thinking') return;
@@ -146,7 +170,6 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
       setThinkingSecondsLeft(prev => {
         if (prev <= 1) {
           clearInterval(timer);
-          // Transition to answering phase and start voice listening
           setPhase('answering');
           startListening();
           return 0;
@@ -166,7 +189,6 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
       setAnswerSecondsLeft(prev => {
         if (prev <= 1) {
           clearInterval(timer);
-          // Auto submit answer when time expires
           handleNextQuestion(false);
           return 0;
         }
@@ -184,61 +206,97 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
     startListening();
   };
 
+  const evaluateAndAdvance = async (
+    ctx: {
+      isSkipped: boolean;
+      finalTranscript: string;
+      speechMetrics: ReturnType<typeof getSpeechMetrics>;
+      postureMetrics: ReturnType<typeof postureTracker.getSummaryMetrics>;
+    },
+    forceLocalFallback: boolean = false
+  ) => {
+    setEvaluatorError(null);
+    setPhase('evaluating');
+
+    try {
+      let evaluation = undefined;
+      if (!ctx.isSkipped && ctx.finalTranscript.length > 5) {
+        evaluation = await evaluatorClient.evaluateAnswer(
+          {
+            userId,
+            attemptId: `attempt-${Date.now()}`,
+            questionId: currentQuestion.id,
+            topic: currentQuestion.topic,
+            question: currentQuestion.question,
+            expectedKeyPoints: currentQuestion.expectedKeyPoints,
+            transcript: ctx.finalTranscript,
+            speechMetrics: {
+              wpm: ctx.speechMetrics.wpm,
+              fillerCount: ctx.speechMetrics.fillerCount,
+              pauses: ctx.speechMetrics.pauseCount,
+              durationSec: ctx.speechMetrics.durationSec,
+            },
+            postureMetrics: {
+              goodPosturePct: ctx.postureMetrics.goodPosturePct,
+              events: ctx.postureMetrics.events,
+              avgShoulderTilt: ctx.postureMetrics.avgShoulderTiltDeg,
+              avgHeadOffset: ctx.postureMetrics.avgHeadOffsetPx,
+            },
+          },
+          interviewSettings.weights,
+          { forceLocalFallback }
+        );
+      }
+
+      setPendingEvalContext(null);
+
+      const answerRecord: AnswerRecord = {
+        questionId: currentQuestion.id,
+        topic: currentQuestion.topic,
+        questionText: currentQuestion.question,
+        expectedKeyPoints: currentQuestion.expectedKeyPoints,
+        transcript: ctx.finalTranscript,
+        speechMetrics: ctx.speechMetrics,
+        postureMetrics: ctx.postureMetrics,
+        evaluation,
+        skipped: ctx.isSkipped,
+      };
+
+      const updatedAnswers = [...answers, answerRecord];
+      setAnswers(updatedAnswers);
+
+      if (currentIdx + 1 < questions.length) {
+        setCurrentIdx(prev => prev + 1);
+      } else {
+        finalizeAttempt(updatedAnswers);
+      }
+    } catch (err) {
+      setPendingEvalContext(ctx);
+      setEvaluatorError(
+        err instanceof Error
+          ? err.message
+          : 'External evaluator service is currently unreachable.'
+      );
+      setPhase('answering');
+    }
+  };
+
   const handleNextQuestion = async (isSkipped: boolean = false) => {
     stopListening();
-    setPhase('evaluating');
 
     const speechMetrics = getSpeechMetrics();
     const postureMetrics = postureTracker.getSummaryMetrics();
     const finalTranscript = isSkipped ? '[Candidate skipped this question]' : transcript.trim();
 
-    // Call Evaluator Client Adapter
-    let evaluation = undefined;
-    if (!isSkipped && finalTranscript.length > 5) {
-      evaluation = await evaluatorClient.evaluateAnswer({
-        userId,
-        attemptId: `attempt-${Date.now()}`,
-        questionId: currentQuestion.id,
-        topic: currentQuestion.topic,
-        question: currentQuestion.question,
-        expectedKeyPoints: currentQuestion.expectedKeyPoints,
-        transcript: finalTranscript,
-        speechMetrics: {
-          wpm: speechMetrics.wpm,
-          fillerCount: speechMetrics.fillerCount,
-          pauses: speechMetrics.pauseCount,
-          durationSec: speechMetrics.durationSec,
-        },
-        postureMetrics: {
-          goodPosturePct: postureMetrics.goodPosturePct,
-          events: postureMetrics.events,
-          avgShoulderTilt: postureMetrics.avgShoulderTiltDeg,
-          avgHeadOffset: postureMetrics.avgHeadOffsetPx,
-        },
-      });
-    }
-
-    const answerRecord: AnswerRecord = {
-      questionId: currentQuestion.id,
-      topic: currentQuestion.topic,
-      questionText: currentQuestion.question,
-      expectedKeyPoints: currentQuestion.expectedKeyPoints,
-      transcript: finalTranscript,
-      speechMetrics,
-      postureMetrics,
-      evaluation,
-      skipped: isSkipped,
-    };
-
-    const updatedAnswers = [...answers, answerRecord];
-    setAnswers(updatedAnswers);
-
-    if (currentIdx + 1 < questions.length) {
-      setCurrentIdx(prev => prev + 1);
-    } else {
-      // Completed all questions! Aggregate final metrics and report
-      finalizeAttempt(updatedAnswers);
-    }
+    await evaluateAndAdvance(
+      {
+        isSkipped,
+        finalTranscript,
+        speechMetrics,
+        postureMetrics,
+      },
+      false
+    );
   };
 
   const finalizeAttempt = (allAnswers: AnswerRecord[]) => {
@@ -262,8 +320,8 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
       }
     });
 
-    const evaluatedCount = Math.max(1, allAnswers.filter(a => !a.skipped).length);
-    const overallScore = Math.round(totalScore / allAnswers.length);
+    const evaluatedCount = Math.max(1, allAnswers.filter(a => !a.skipped && a.evaluation).length);
+    const overallScore = Math.round(totalScore / Math.max(1, allAnswers.length));
 
     const categoryScores: CategoryScores = {
       answerQuality: Math.round(catTotals.answerQuality / evaluatedCount) || 50,
@@ -286,7 +344,7 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
       answers: allAnswers,
       overallScore,
       categoryScores,
-      passed: overallScore >= 80, // >= 80% marks attempt as PASSED & COMPLETED
+      passed: overallScore >= interviewSettings.passThreshold,
       status: 'completed',
     };
 
@@ -368,6 +426,26 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
               {currentQuestion.question}
             </h3>
 
+            {currentQuestion.followUp && (
+              <div className="pt-1">
+                {!showFollowUp ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowFollowUp(true)}
+                    className="text-[11px] font-medium text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                  >
+                    <HelpCircle className="w-3 h-3" />
+                    <span>Show Interviewer Follow-up Prompt</span>
+                  </button>
+                ) : (
+                  <div className="mt-1.5 p-2.5 bg-indigo-950/30 border border-indigo-500/30 rounded-lg text-xs text-indigo-200">
+                    <span className="font-mono text-[10px] uppercase text-indigo-400 block mb-0.5">Follow-Up Question</span>
+                    {currentQuestion.followUp}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Thinking Timer Overlay (If active) */}
             {phase === 'thinking' && (
               <div className="pt-2 flex items-center justify-between border-t border-neutral-900 mt-2">
@@ -419,6 +497,34 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
               className="w-full flex-1 bg-neutral-950 border border-neutral-800 rounded-xl p-4 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-indigo-500 leading-relaxed font-sans"
             />
           </div>
+
+          {evaluatorError && pendingEvalContext && (
+            <div className="p-3 bg-rose-950/40 border border-rose-500/40 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+              <div className="flex items-start gap-2 text-rose-200">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-semibold">Evaluator Unreachable</div>
+                  <p className="text-[11px] text-rose-300/90">{evaluatorError}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => evaluateAndAdvance(pendingEvalContext, false)}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-[11px] font-semibold"
+                >
+                  Retry Evaluator
+                </button>
+                <button
+                  type="button"
+                  onClick={() => evaluateAndAdvance(pendingEvalContext, true)}
+                  className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded-lg text-[11px] font-medium border border-neutral-700"
+                >
+                  Use Local Scoring
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Action Controls */}
           <div className="flex items-center justify-between pt-2">
@@ -505,23 +611,33 @@ export const InterviewSession: React.FC<InterviewSessionProps> = ({
             <div className="space-y-1.5 text-[11px]">
               <div className="flex items-center justify-between">
                 <span className="text-neutral-300">1. Technical Answer Conveyance</span>
-                <span className="font-mono text-indigo-400 font-semibold">35%</span>
+                <span className="font-mono text-indigo-400 font-semibold">
+                  {Math.round(interviewSettings.weights.answerQuality * 100)}%
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-neutral-300">2. Body Posture & Alignment</span>
-                <span className="font-mono text-emerald-400 font-semibold">20%</span>
+                <span className="font-mono text-emerald-400 font-semibold">
+                  {Math.round(interviewSettings.weights.posture * 100)}%
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-neutral-300">3. Communication Skills & WPM</span>
-                <span className="font-mono text-cyan-400 font-semibold">20%</span>
+                <span className="font-mono text-cyan-400 font-semibold">
+                  {Math.round(interviewSettings.weights.communication * 100)}%
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-neutral-300">4. Word Formation & Grammar</span>
-                <span className="font-mono text-purple-400 font-semibold">15%</span>
+                <span className="font-mono text-purple-400 font-semibold">
+                  {Math.round(interviewSettings.weights.wordFormation * 100)}%
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-neutral-300">5. Speaking Style & Cadence</span>
-                <span className="font-mono text-amber-400 font-semibold">10%</span>
+                <span className="font-mono text-amber-400 font-semibold">
+                  {Math.round(interviewSettings.weights.speakingStyle * 100)}%
+                </span>
               </div>
             </div>
           </div>

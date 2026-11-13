@@ -1,36 +1,422 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() { return request.auth != null && request.auth.token.email_verified == true; }
-    function isAdmin() { return signedIn() && request.auth.token.email == 'mavbharath01@gmail.com'; }
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
 
-    match /users/{uid} {
-      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
-      // A user can only create their own pending candidate profile. The admin identity
-      // is derived from the verified token email, not a browser-supplied role.
-      allow create: if signedIn() && request.auth.uid == uid
-        && request.resource.data.uid == uid
-        && request.resource.data.email == request.auth.token.email
-        && ((isAdmin() && request.resource.data.role == 'admin' && request.resource.data.status == 'approved')
-          || (!isAdmin() && request.resource.data.role == 'candidate' && request.resource.data.status == 'pending'));
-      allow update: if isAdmin()
-        || (signedIn() && request.auth.uid == uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL'])
-          && request.resource.data.role == resource.data.role
-          && request.resource.data.status == resource.data.status);
+    // --- Reusable Hardened Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedAdminEmail() {
+      return isEmailVerified() && request.auth.token.email in [
+        'mavbharath01@gmail.com',
+        'bharath.hkumar51@gmail.com',
+        'admin@cloudnativeacademy.in'
+      ];
+    }
+
+    function isAdmin() {
+      return isEmailVerified() && (
+        isBootstrappedAdminEmail() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // --- Entity Validation Blueprints ---
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'fullName', 'email', 'role', 'isApproved', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'fullName', 'email', 'role', 'isApproved', 'avatarUrl', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 180
+        && data.role in ['admin', 'student']
+        && data.isApproved is bool
+        && (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'createdAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 180
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAccessRequest(data) {
+      return data.keys().hasAll(['id', 'userId', 'fullName', 'email', 'targetRole', 'reason', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'fullName', 'email', 'targetRole', 'reason', 'status', 'approvedAt', 'approvedBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 180
+        && data.targetRole is string && data.targetRole.size() >= 1 && data.targetRole.size() <= 120
+        && data.reason is string && data.reason.size() <= 1000
+        && data.status in ['pending', 'approved', 'rejected']
+        && (!('approvedAt' in data) || (data.approvedAt is string && data.approvedAt.size() <= 64))
+        && (!('approvedBy' in data) || (data.approvedBy is string && data.approvedBy.size() <= 180))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidActivityLog(data) {
+      return data.keys().hasAll(['id', 'userId', 'userEmail', 'userName', 'action', 'description', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'userEmail', 'userName', 'action', 'description', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 180
+        && data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 120
+        && data.action in ['login', 'mock_interview_start', 'mock_interview_complete', 'access_requested', 'copilot_active']
+        && data.description is string && data.description.size() >= 1 && data.description.size() <= 500
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCategoryScores(scores) {
+      return scores is map
+        && scores.keys().hasAll(['answerQuality', 'communication', 'wordFormation', 'speakingStyle', 'posture'])
+        && scores.keys().hasOnly(['answerQuality', 'communication', 'wordFormation', 'speakingStyle', 'posture'])
+        && scores.answerQuality is number && scores.answerQuality >= 0 && scores.answerQuality <= 100
+        && scores.communication is number && scores.communication >= 0 && scores.communication <= 100
+        && scores.wordFormation is number && scores.wordFormation >= 0 && scores.wordFormation <= 100
+        && scores.speakingStyle is number && scores.speakingStyle >= 0 && scores.speakingStyle <= 100
+        && scores.posture is number && scores.posture >= 0 && scores.posture <= 100;
+    }
+
+    function isValidInterviewAttempt(data) {
+      return data.keys().hasAll([
+        'id', 'userId', 'candidateName', 'track', 'seniority', 'selectedTopics',
+        'startedAt', 'questions', 'answers', 'overallScore', 'categoryScores',
+        'passed', 'status', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'candidateName', 'track', 'seniority', 'selectedTopics',
+          'startedAt', 'endedAt', 'questions', 'answers', 'overallScore', 'categoryScores',
+          'passed', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.candidateName is string && data.candidateName.size() >= 1 && data.candidateName.size() <= 120
+        && data.track in ['devops', 'sre', 'kubernetes', 'platform', 'behavioral']
+        && data.seniority in ['beginner', 'intermediate', 'senior', 'staff', 'mixed']
+        && data.selectedTopics is list && data.selectedTopics.size() >= 1 && data.selectedTopics.size() <= 10 && data.selectedTopics[0] is string
+        && data.startedAt is string && data.startedAt.size() <= 64
+        && (!('endedAt' in data) || (data.endedAt is string && data.endedAt.size() <= 64))
+        && data.questions is list && data.questions.size() <= 30
+        && data.answers is list && data.answers.size() <= 30
+        && data.overallScore is number && data.overallScore >= 0 && data.overallScore <= 100
+        && isValidCategoryScores(data.categoryScores)
+        && data.passed is bool
+        && data.status in ['in_progress', 'completed', 'abandoned']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidQuestionHistory(data) {
+      return data.keys().hasAll(['id', 'userId', 'questionHash', 'topic', 'askedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'questionHash', 'topic', 'askedAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.questionHash is string && data.questionHash.size() >= 1 && data.questionHash.size() <= 128
+        && data.topic is string && data.topic.size() >= 1 && data.topic.size() <= 64
+        && data.askedAt is timestamp;
+    }
+
+    function isValidUserInterviewStatus(data) {
+      return data.keys().hasAll(['id', 'userId', 'candidateName', 'topicSetKey', 'status', 'bestScore', 'latestScore', 'attemptCount', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'candidateName', 'topicSetKey', 'status', 'bestScore', 'latestScore', 'attemptCount', 'completedAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.candidateName is string && data.candidateName.size() >= 1 && data.candidateName.size() <= 120
+        && data.topicSetKey is string && data.topicSetKey.size() >= 1 && data.topicSetKey.size() <= 200
+        && data.status in ['Completed', 'In Progress', 'Not Started']
+        && data.bestScore is number && data.bestScore >= 0 && data.bestScore <= 100
+        && data.latestScore is number && data.latestScore >= 0 && data.latestScore <= 100
+        && data.attemptCount is number && data.attemptCount >= 0 && data.attemptCount <= 10000
+        && (!('completedAt' in data) || (data.completedAt is string && data.completedAt.size() <= 64))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidInterviewSettings(data) {
+      return data.keys().hasAll(['passThreshold', 'weights', 'defaultQuestionsPerSession', 'defaultTimePerAnswerSec', 'updatedAt'])
+        && data.keys().hasOnly(['passThreshold', 'weights', 'defaultQuestionsPerSession', 'defaultTimePerAnswerSec', 'updatedAt'])
+        && data.passThreshold is number && data.passThreshold >= 1 && data.passThreshold <= 100
+        && data.weights is map
+        && data.weights.keys().hasAll(['answerQuality', 'communication', 'wordFormation', 'speakingStyle', 'posture'])
+        && data.weights.keys().hasOnly(['answerQuality', 'communication', 'wordFormation', 'speakingStyle', 'posture'])
+        && data.weights.answerQuality is number && data.weights.answerQuality >= 0 && data.weights.answerQuality <= 1
+        && data.weights.communication is number && data.weights.communication >= 0 && data.weights.communication <= 1
+        && data.weights.wordFormation is number && data.weights.wordFormation >= 0 && data.weights.wordFormation <= 1
+        && data.weights.speakingStyle is number && data.weights.speakingStyle >= 0 && data.weights.speakingStyle <= 1
+        && data.weights.posture is number && data.weights.posture >= 0 && data.weights.posture <= 1
+        && data.defaultQuestionsPerSession is number && data.defaultQuestionsPerSession >= 1 && data.defaultQuestionsPerSession <= 30
+        && data.defaultTimePerAnswerSec is number && data.defaultTimePerAnswerSec >= 15 && data.defaultTimePerAnswerSec <= 600
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProctoredFeed(data) {
+      return data.keys().hasAll([
+        'sessionId', 'studentId', 'studentName', 'track', 'difficulty', 'startedAt',
+        'currentQuestionIndex', 'totalQuestions', 'currentQuestion', 'currentTranscript',
+        'isCameraActive', 'isAudioActive', 'status', 'lastHeartbeat', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'sessionId', 'studentId', 'studentName', 'track', 'difficulty', 'startedAt',
+          'currentQuestionIndex', 'totalQuestions', 'currentQuestion', 'currentTranscript',
+          'videoFrameDataUrl', 'isCameraActive', 'isAudioActive', 'status', 'lastHeartbeat', 'updatedAt'
+        ])
+        && isValidId(data.sessionId)
+        && isValidId(data.studentId)
+        && data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120
+        && data.track is string && data.track.size() >= 1 && data.track.size() <= 120
+        && data.difficulty is string && data.difficulty.size() >= 1 && data.difficulty.size() <= 40
+        && data.startedAt is string && data.startedAt.size() <= 64
+        && data.currentQuestionIndex is number && data.currentQuestionIndex >= 0 && data.currentQuestionIndex <= 50
+        && data.totalQuestions is number && data.totalQuestions >= 1 && data.totalQuestions <= 50
+        && data.currentQuestion is string && data.currentQuestion.size() <= 1000
+        && data.currentTranscript is string && data.currentTranscript.size() <= 4000
+        && (!('videoFrameDataUrl' in data) || (data.videoFrameDataUrl is string && data.videoFrameDataUrl.size() <= 200000))
+        && data.isCameraActive is bool
+        && data.isAudioActive is bool
+        && data.status in ['live', 'completed', 'paused']
+        && data.lastHeartbeat is string && data.lastHeartbeat.size() <= 64
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    // Boot connectivity verification document
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // Users (PII isolated: owner or admin only)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isEmailVerified()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUser(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().email == request.auth.token.email
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isBootstrappedAdminEmail() ||
+          (incoming().role == 'student' && incoming().isApproved == false)
+        );
+      allow update: if isEmailVerified()
+        && isValidId(userId)
+        && isValidUser(incoming())
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'avatarUrl', 'updatedAt']))
+        );
+      allow delete: if false;
+    }
+
+    // Admin registry
+    match /admins/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isEmailVerified()
+        && isValidId(userId)
+        && isValidAdminUser(incoming())
+        && incoming().uid == userId
+        && incoming().createdAt == request.time
+        && (isAdmin() || (isOwner(userId) && isBootstrappedAdminEmail()));
+      allow update: if false;
       allow delete: if isAdmin();
     }
 
-    match /accessRequests/{requestId} {
-      allow create: if signedIn()
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.email == request.auth.token.email
-        && request.resource.data.status == 'pending';
-      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
-      allow update, delete: if isAdmin();
+    // Candidate access requests
+    match /access_requests/{requestId} {
+      allow get: if isSignedIn() && isValidId(requestId) && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isEmailVerified()
+        && isValidId(requestId)
+        && isValidAccessRequest(incoming())
+        && incoming().id == requestId
+        && incoming().userId == request.auth.uid
+        && incoming().email == request.auth.token.email
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isEmailVerified()
+        && isValidId(requestId)
+        && isValidAccessRequest(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && isAdmin()
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'approvedAt', 'approvedBy', 'updatedAt']);
+      allow delete: if isAdmin();
     }
 
-    // Add explicit per-collection rules before introducing any other cloud data.
-    match /{document=**} { allow read, write: if false; }
+    // Audit activity logs
+    match /user_activity_logs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isEmailVerified()
+        && isValidId(logId)
+        && isValidActivityLog(incoming())
+        && incoming().id == logId
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // Mock interview attempts
+    match /interview_attempts/{attemptId} {
+      allow get: if isSignedIn() && isValidId(attemptId) && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isEmailVerified()
+        && isValidId(attemptId)
+        && isValidInterviewAttempt(incoming())
+        && incoming().id == attemptId
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isEmailVerified()
+        && isValidId(attemptId)
+        && isValidInterviewAttempt(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid
+            && existing().status != 'completed'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'answers', 'overallScore', 'categoryScores', 'passed', 'status', 'endedAt', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isAdmin();
+    }
+
+    // Per-user asked question history (no repeats)
+    match /user_question_history/{historyId} {
+      allow get: if isSignedIn() && isValidId(historyId) && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isEmailVerified()
+        && isValidId(historyId)
+        && isValidQuestionHistory(incoming())
+        && incoming().id == historyId
+        && incoming().userId == request.auth.uid
+        && incoming().askedAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // Per-user topic-set completion status (COMPLETED cannot be revoked)
+    match /user_interview_status/{statusId} {
+      allow get: if isSignedIn() && isValidId(statusId) && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isEmailVerified()
+        && isValidId(statusId)
+        && isValidUserInterviewStatus(incoming())
+        && incoming().id == statusId
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isEmailVerified()
+        && isValidId(statusId)
+        && isValidUserInterviewStatus(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().topicSetKey == existing().topicSetKey
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid
+            && (existing().status != 'Completed' || incoming().status == 'Completed')
+            && incoming().bestScore >= existing().bestScore
+            && incoming().attemptCount >= existing().attemptCount
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'bestScore', 'latestScore', 'attemptCount', 'completedAt', 'candidateName', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isAdmin();
+    }
+
+    // Global interview settings (admin writes, signed-in reads)
+    match /interview_settings/{settingId} {
+      allow get: if isSignedIn() && isValidId(settingId);
+      allow list: if isSignedIn() && resource.data.passThreshold is number;
+      allow create, update: if isEmailVerified()
+        && isValidId(settingId)
+        && isValidInterviewSettings(incoming())
+        && isAdmin()
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Live mock interview session telemetry
+    match /proctored_feeds/{sessionId} {
+      allow get: if isSignedIn() && isValidId(sessionId) && (existing().studentId == request.auth.uid || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.studentId == request.auth.uid);
+      allow create: if isEmailVerified()
+        && isValidId(sessionId)
+        && isValidProctoredFeed(incoming())
+        && incoming().sessionId == sessionId
+        && incoming().studentId == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow update: if isEmailVerified()
+        && isValidId(sessionId)
+        && isValidProctoredFeed(incoming())
+        && incoming().sessionId == existing().sessionId
+        && incoming().studentId == existing().studentId
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().studentId == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'currentQuestionIndex', 'currentQuestion', 'currentTranscript',
+              'videoFrameDataUrl', 'isCameraActive', 'isAudioActive',
+              'status', 'lastHeartbeat', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(sessionId) && (existing().studentId == request.auth.uid || isAdmin());
+    }
   }
 }

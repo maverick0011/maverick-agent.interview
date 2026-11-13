@@ -2,15 +2,15 @@
  * Mock Interview Page - Maverick AI Studio
  * Real technical interview simulation with track selection, seniority selection,
  * 10 tool-level topics, live voice-to-text transcription, camera & posture skeleton overlay,
- * and 5-dimension rubric evaluation with the 80% Pass/Completion rule.
- * (Note: Proctored live stream warning badges have been completely removed as requested).
+ * server-side Gemini question generation (with no-repeat history), and Cloud Firestore persistence.
  */
 
 import React, { useState } from 'react';
-import { 
-  InterviewSessionConfig, 
-  InterviewAttempt, 
-  InterviewQuestion 
+import { Loader2 } from 'lucide-react';
+import {
+  InterviewSessionConfig,
+  InterviewAttempt,
+  InterviewQuestion,
 } from '../features/mock-interview/types';
 import { TopicSelector } from '../features/mock-interview/components/TopicSelector';
 import { PreCheckModal } from '../features/mock-interview/components/PreCheckModal';
@@ -19,24 +19,53 @@ import { ResultsView } from '../features/mock-interview/components/ResultsView';
 import { questionBankService } from '../features/mock-interview/services/questionBank';
 import { videoProctorService } from '../services/videoProctorService';
 import { localStore } from '../database/localStore';
+import { firestoreService } from '../services/firestoreService';
 
 export const MockInterviewPage: React.FC = () => {
   const currentUser = localStore.getCurrentUser();
+  const interviewSettings = localStore.getInterviewSettings();
 
   const [config, setConfig] = useState<InterviewSessionConfig>({
     track: 'devops',
     seniority: 'senior',
     selectedTopics: ['Linux', 'Docker', 'Kubernetes'],
-    questionCount: 10,
-    timePerAnswerSec: 120,
+    questionCount: interviewSettings.defaultQuestionsPerSession || 10,
+    timePerAnswerSec: interviewSettings.defaultTimePerAnswerSec || 120,
     thinkingTimeSec: 10,
     readAloud: true,
   });
 
   const [stage, setStage] = useState<'config' | 'precheck' | 'session' | 'results'>('config');
+  const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false);
   const [activeQuestions, setActiveQuestions] = useState<InterviewQuestion[]>([]);
   const [activeMediaStream, setActiveMediaStream] = useState<MediaStream | null>(null);
   const [completedAttempt, setCompletedAttempt] = useState<InterviewAttempt | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+
+  const loadUniqueQuestions = async (): Promise<InterviewQuestion[]> => {
+    setIsGeneratingQuestions(true);
+    try {
+      let remoteHashes: string[] = [];
+      if (firestoreService.isAuthenticated()) {
+        try {
+          remoteHashes = await firestoreService.getUserQuestionHistory(currentUser.id);
+        } catch {
+          // Proceed with local history if Firestore read fails
+        }
+      }
+
+      const { questions } = await questionBankService.generateQuestionsWithFallback(
+        currentUser.id,
+        config.selectedTopics,
+        config.seniority,
+        config.questionCount,
+        remoteHashes
+      );
+      return questions;
+    } finally {
+      setIsGeneratingQuestions(false);
+    }
+  };
 
   // 1. Proceed to Pre-check
   const handleProceedToPreCheck = () => {
@@ -44,23 +73,16 @@ export const MockInterviewPage: React.FC = () => {
   };
 
   // 2. Start Session after Hardware Pre-Check
-  const handleStartSession = (stream: MediaStream | null) => {
+  const handleStartSession = async (stream: MediaStream | null) => {
     setActiveMediaStream(stream);
-
-    // Retrieve fresh questions for this user from the selected topics with NO REPEATS
-    const questions = questionBankService.getQuestionsForSession(
-      currentUser.id,
-      config.selectedTopics,
-      config.seniority,
-      config.questionCount
-    );
-
+    const questions = await loadUniqueQuestions();
+    const sessionId = `mock_session_${Date.now()}`;
+    setActiveSessionId(sessionId);
     setActiveQuestions(questions);
     setStage('session');
 
-    // Transmit live stream feed to evaluator mavbharath01@gmail.com
     videoProctorService.startProctoringBroadcast({
-      sessionId: `mock-session-${Date.now()}`,
+      sessionId,
       studentId: currentUser.id,
       studentName: currentUser.fullName,
       track: `${config.track.toUpperCase()} (${config.selectedTopics.join(', ')})`,
@@ -70,20 +92,71 @@ export const MockInterviewPage: React.FC = () => {
       currentQuestionIndex: 0,
     });
 
+    if (firestoreService.isAuthenticated()) {
+      firestoreService
+        .upsertProctoredFeed({
+          sessionId,
+          studentId: currentUser.id,
+          studentName: currentUser.fullName,
+          track: `${config.track.toUpperCase()} (${config.selectedTopics.join(', ')})`,
+          difficulty: config.seniority,
+          startedAt: new Date().toISOString(),
+          currentQuestionIndex: 0,
+          totalQuestions: questions.length,
+          currentQuestion: questions[0]?.question || '',
+          currentTranscript: 'Candidate started mock interview session',
+          isCameraActive: !!stream,
+          isAudioActive: true,
+          status: 'live',
+          lastHeartbeat: new Date().toISOString(),
+        })
+        .catch(() => {});
+
+      firestoreService
+        .logActivity({
+          userId: currentUser.id,
+          userEmail: currentUser.email,
+          userName: currentUser.fullName,
+          action: 'mock_interview_start',
+          description: `Started ${config.track.toUpperCase()} mock round (${config.selectedTopics.join(', ')})`,
+        })
+        .catch(() => {});
+    }
+
     localStore.logUserActivity({
       userId: currentUser.id,
       userEmail: currentUser.email,
       userName: currentUser.fullName,
       action: 'mock_interview_start',
-      description: `Started ${config.track.toUpperCase()} mock round (${config.selectedTopics.join(', ')}). Live stream active for evaluator mavbharath01@gmail.com`,
+      description: `Started ${config.track.toUpperCase()} mock round (${config.selectedTopics.join(', ')})`,
     });
   };
 
-  // 3. Complete Session and Record to Store
-  const handleSessionComplete = (attempt: InterviewAttempt) => {
+  // 3. Complete Session and Record to Firestore + LocalStore
+  const handleSessionComplete = async (attempt: InterviewAttempt) => {
     videoProctorService.stopProctoring();
     setCompletedAttempt(attempt);
     localStore.saveInterviewAttempt(attempt);
+
+    if (activeSessionId && firestoreService.isAuthenticated()) {
+      firestoreService.deleteProctoredFeed(activeSessionId).catch(() => {});
+    }
+
+    if (firestoreService.isAuthenticated()) {
+      const settings = localStore.getInterviewSettings();
+      firestoreService.saveInterviewAttempt(attempt, settings.passThreshold).catch(err => {
+        console.warn('Firestore attempt sync warning:', err);
+      });
+      firestoreService
+        .logActivity({
+          userId: currentUser.id,
+          userEmail: currentUser.email,
+          userName: currentUser.fullName,
+          action: 'mock_interview_complete',
+          description: `Completed interview assessment with overall score ${attempt.overallScore}% (${attempt.passed ? 'PASSED' : 'RETRY'})`,
+        })
+        .catch(() => {});
+    }
 
     localStore.logUserActivity({
       userId: currentUser.id,
@@ -97,19 +170,18 @@ export const MockInterviewPage: React.FC = () => {
   };
 
   // 4. Retry with fresh questions
-  const handleRetry = () => {
-    const freshQuestions = questionBankService.getQuestionsForSession(
-      currentUser.id,
-      config.selectedTopics,
-      config.seniority,
-      config.questionCount
-    );
+  const handleRetry = async () => {
+    const freshQuestions = await loadUniqueQuestions();
     setActiveQuestions(freshQuestions);
     setStage('session');
   };
 
   // 5. Exit or reset back to topic selector
   const handleResetToConfig = () => {
+    videoProctorService.stopProctoring();
+    if (activeSessionId && firestoreService.isAuthenticated()) {
+      firestoreService.deleteProctoredFeed(activeSessionId).catch(() => {});
+    }
     if (activeMediaStream) {
       activeMediaStream.getTracks().forEach(t => t.stop());
       setActiveMediaStream(null);
@@ -136,15 +208,24 @@ export const MockInterviewPage: React.FC = () => {
           <span className="font-bold text-white">{currentUser.fullName}</span>
           <span className="text-neutral-600">·</span>
           <span className="font-mono text-indigo-400 text-[11px]">{currentUser.email}</span>
-          <span className="text-neutral-600">·</span>
-          <span className="text-[11px] font-mono text-amber-300">
-            Evaluator: mavbharath01@gmail.com
-          </span>
         </div>
       </div>
 
+      {/* Question Generation Loading Overlay */}
+      {isGeneratingQuestions && (
+        <div className="p-8 bg-neutral-900 border border-neutral-800 rounded-2xl flex flex-col items-center justify-center gap-3 text-center">
+          <Loader2 className="w-7 h-7 text-indigo-400 animate-spin" />
+          <div className="text-sm font-semibold text-white">
+            Generating Unique Technical Questions...
+          </div>
+          <p className="text-xs text-neutral-400 max-w-md">
+            Checking your prior question history and preparing non-repeating questions across {config.selectedTopics.join(', ')}.
+          </p>
+        </div>
+      )}
+
       {/* Main Feature Viewport */}
-      {stage === 'config' && (
+      {!isGeneratingQuestions && stage === 'config' && (
         <TopicSelector
           config={config}
           onChangeConfig={setConfig}
@@ -152,7 +233,7 @@ export const MockInterviewPage: React.FC = () => {
         />
       )}
 
-      {stage === 'session' && (
+      {!isGeneratingQuestions && stage === 'session' && (
         <InterviewSession
           config={config}
           questions={activeQuestions}
@@ -164,7 +245,7 @@ export const MockInterviewPage: React.FC = () => {
         />
       )}
 
-      {stage === 'results' && completedAttempt && (
+      {!isGeneratingQuestions && stage === 'results' && completedAttempt && (
         <ResultsView
           attempt={completedAttempt}
           onRetry={handleRetry}

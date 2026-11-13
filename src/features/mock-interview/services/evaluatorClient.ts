@@ -48,6 +48,22 @@ export interface EvaluatorResponse {
   };
 }
 
+export interface EvaluatorConfig {
+  endpoint: string;
+  timeoutMs: number;
+  strictExternal?: boolean;
+  responseMapper?: (raw: unknown) => EvaluatorResponse;
+}
+
+export class EvaluatorUnreachableError extends Error {
+  public readonly endpoint: string;
+  constructor(message: string, endpoint: string) {
+    super(message);
+    this.name = 'EvaluatorUnreachableError';
+    this.endpoint = endpoint;
+  }
+}
+
 export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
   answerQuality: 0.35,
   communication: 0.20,
@@ -59,10 +75,32 @@ export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
 export class EvaluatorClient {
   private endpoint: string;
   private timeoutMs: number;
+  private strictExternal: boolean;
+  private responseMapper: (raw: unknown) => EvaluatorResponse;
 
-  constructor(endpoint: string = 'http://localhost:8000/api/evaluate', timeoutMs: number = 6000) {
+  constructor(
+    endpoint: string = 'http://localhost:8000/api/evaluate',
+    timeoutMs: number = 6000
+  ) {
     this.endpoint = endpoint;
     this.timeoutMs = timeoutMs;
+    this.strictExternal = false;
+    this.responseMapper = (raw: unknown) => raw as EvaluatorResponse;
+  }
+
+  public configure(config: Partial<EvaluatorConfig>) {
+    if (typeof config.endpoint === 'string' && config.endpoint.trim()) {
+      this.endpoint = config.endpoint.trim();
+    }
+    if (typeof config.timeoutMs === 'number' && config.timeoutMs > 0) {
+      this.timeoutMs = config.timeoutMs;
+    }
+    if (typeof config.strictExternal === 'boolean') {
+      this.strictExternal = config.strictExternal;
+    }
+    if (typeof config.responseMapper === 'function') {
+      this.responseMapper = config.responseMapper;
+    }
   }
 
   public setEndpoint(endpoint: string) {
@@ -73,32 +111,62 @@ export class EvaluatorClient {
     return this.endpoint;
   }
 
+  public setTimeoutMs(timeoutMs: number) {
+    this.timeoutMs = timeoutMs;
+  }
+
   /**
-   * Evaluates an answer through the external local AI evaluator service,
-   * with graceful fallback to intelligent local rubric heuristics.
+   * Evaluates an answer through the external local AI evaluator service (or server proxy).
+   * If strictExternal is enabled and the evaluator cannot be reached, throws EvaluatorUnreachableError
+   * so the UI can let the user retry without losing their recorded answer.
    */
   public async evaluateAnswer(
     payload: EvaluatorPayload,
-    weights: ScoringWeights = DEFAULT_SCORING_WEIGHTS
+    weights: ScoringWeights = DEFAULT_SCORING_WEIGHTS,
+    options?: { forceLocalFallback?: boolean }
   ): Promise<AnswerEvaluation> {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    if (!options?.forceLocalFallback) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
-      const res = await fetch(this.endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
+        const targetUrl = this.endpoint.startsWith('/')
+          ? this.endpoint
+          : '/api/mock-interview/evaluate';
 
-      if (res.ok) {
-        const data: EvaluatorResponse = await res.json();
-        return this.formatEvaluation(payload, data.scores, data.feedback, weights);
+        const res = await fetch(targetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            targetUrl === '/api/mock-interview/evaluate'
+              ? { endpoint: this.endpoint, payload }
+              : payload
+          ),
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+
+        if (res.ok) {
+          const raw = await res.json();
+          const data = this.responseMapper(raw);
+          if (data?.scores) {
+            return this.formatEvaluation(payload, data.scores, data.feedback, weights);
+          }
+        } else if (this.strictExternal) {
+          throw new EvaluatorUnreachableError(
+            `External evaluator responded with status ${res.status}`,
+            this.endpoint
+          );
+        }
+      } catch (err) {
+        if (this.strictExternal) {
+          if (err instanceof EvaluatorUnreachableError) throw err;
+          throw new EvaluatorUnreachableError(
+            err instanceof Error ? err.message : 'External AI evaluator is unreachable.',
+            this.endpoint
+          );
+        }
       }
-    } catch {
-      // Endpoint unreachable or timeout: use high-fidelity local heuristic evaluator
     }
 
     return this.runLocalFallbackEvaluation(payload, weights);

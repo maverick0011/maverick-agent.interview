@@ -22,7 +22,9 @@ import { SettingsPage } from './pages/SettingsPage';
 import { AuthModal } from './components/auth/AuthModal';
 import { AdminDashboardModal } from './components/admin/AdminDashboardModal';
 import { UserProfile } from './types';
-import { ShieldAlert, ArrowRight } from 'lucide-react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from './services/firebase';
+import { firestoreService } from './services/firestoreService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
@@ -33,6 +35,26 @@ export default function App() {
   const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserProfile>(localStore.getCurrentUser());
   const [showWizard, setShowWizard] = useState(!localStore.isWizardCompleted());
+
+  // Listen for Firebase Auth state changes and sync Firestore profile + settings
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async firebaseUser => {
+      if (!firebaseUser) return;
+      try {
+        const synced = await firestoreService.syncAuthenticatedUser(firebaseUser);
+        localStore.setCurrentUser(synced);
+        setCurrentUser(synced);
+
+        const remoteSettings = await firestoreService.getInterviewSettings();
+        if (remoteSettings) {
+          localStore.updateInterviewSettings(remoteSettings);
+        }
+      } catch (err) {
+        console.warn('Auth sync notice:', err);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Listen for user changes or storage updates
   const handleUserChanged = (updatedUser: UserProfile) => {
@@ -76,24 +98,6 @@ export default function App() {
         isFloatingOpen={isFloatingOpen}
         currentUser={currentUser}
       />
-
-      {/* Account Pending Approval Banner if student is not approved */}
-      {!currentUser.isApproved && currentUser.role !== 'admin' && (
-        <div className="bg-amber-950/60 border-b border-amber-600/30 px-4 py-2 flex items-center justify-between text-xs text-amber-200">
-          <div className="flex items-center gap-2">
-            <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>
-              <strong>Google SSO Access Pending:</strong> Your account <em>{currentUser.email}</em> is awaiting approval by administrator <strong className="text-white">mavbharath01@gmail.com</strong>.
-            </span>
-          </div>
-          <button
-            onClick={() => setIsAuthOpen(true)}
-            className="flex items-center gap-1 font-semibold text-amber-300 hover:text-white underline underline-offset-2 ml-4 shrink-0"
-          >
-            Google SSO Options <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
 
       {/* Main Workspace Frame */}
       <div className="flex flex-1 overflow-hidden">
