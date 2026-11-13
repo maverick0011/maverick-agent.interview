@@ -20,18 +20,22 @@ import { ollamaService } from '../services/ollamaService';
 import { ollamaLauncher } from '../services/ollamaLauncherService';
 import { InterviewSession, AIResponse, AppSettings } from '../types';
 import { OllamaLaunchButton } from '../components/common/OllamaLaunchButton';
+import { getActiveCopilotSessionConfig } from '../components/copilot/CreateSessionModal';
 
 interface DashboardPageProps {
   onNavigate: (tab: any) => void;
   onOpenModelDoctor: () => void;
   onToggleFloating: () => void;
+  onOpenCreateSession?: () => void;
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({
   onNavigate,
   onOpenModelDoctor,
   onToggleFloating,
+  onOpenCreateSession,
 }) => {
+  const activeSessionConfig = getActiveCopilotSessionConfig();
   const [sessions, setSessions] = useState<InterviewSession[]>([]);
   const [recentResponses, setRecentResponses] = useState<AIResponse[]>([]);
   const [settings, setSettings] = useState<AppSettings>(localStore.getSettings());
@@ -76,31 +80,39 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
       <div className="relative overflow-hidden p-6 rounded-2xl bg-gradient-to-r from-neutral-900 via-neutral-900 to-indigo-950/40 border border-neutral-800">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2">
-            <div className="flex items-center gap-2 text-xs font-mono text-indigo-400">
-              <span>LOCAL AIR-GAPPED COPILOT</span>
-              <span>·</span>
-              <span>APPLE SILICON READY</span>
+            <div className="flex items-center gap-2 text-xs text-indigo-400 font-medium">
+              <span>{activeSessionConfig.company ? `${activeSessionConfig.company} · ` : ''}{activeSessionConfig.targetRole}</span>
+              <span aria-hidden="true">·</span>
+              <span>Resume Grounding Ready</span>
             </div>
-            <h1 className="text-2xl md:text-3xl font-extrabold text-white tracking-tight">
+            <h1 className="text-2xl md:text-3xl font-extrabold text-white tracking-tight [text-wrap:balance]">
               Think Faster. Answer Smarter.
             </h1>
             <p className="text-sm text-neutral-400 max-w-xl">
-              Maverick AI runs private, low-latency interview assistance entirely on your MacBook. 
-              Zero cloud ingress, local Qwen3 8B inference, and dual-channel meeting transcription.
+              Launch a live interview copilot tailored to your resume and job description, run camera-proctored mock interviews, or pop out the discreet Floating HUD.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            {onOpenCreateSession && (
+              <button
+                onClick={onOpenCreateSession}
+                className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md transition-colors whitespace-nowrap"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>Create Session</span>
+              </button>
+            )}
             <button
               onClick={() => onNavigate('copilot')}
-              className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md transition-colors"
+              className="flex items-center gap-2 px-4 py-2.5 bg-neutral-850 hover:bg-neutral-800 border border-neutral-700/80 text-white rounded-xl text-xs font-semibold transition-colors whitespace-nowrap"
             >
-              <Radio className="w-4 h-4" />
-              <span>Launch Live Copilot</span>
+              <Radio className="w-4 h-4 text-indigo-400" />
+              <span>Live Copilot</span>
             </button>
             <button
               onClick={onToggleFloating}
-              className="flex items-center gap-2 px-4 py-2.5 bg-neutral-850 hover:bg-neutral-800 border border-neutral-700/80 text-neutral-200 rounded-xl text-xs font-semibold transition-colors"
+              className="flex items-center gap-2 px-4 py-2.5 bg-neutral-850 hover:bg-neutral-800 border border-neutral-700/80 text-neutral-200 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap"
             >
               <Layers className="w-4 h-4 text-indigo-400" />
               <span>Floating HUD</span>

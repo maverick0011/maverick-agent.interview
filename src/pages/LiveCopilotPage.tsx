@@ -15,34 +15,43 @@ import {
   HelpCircle,
   FileText,
   AlertCircle,
-  Pin
+  Pin,
+  SlidersHorizontal
 } from 'lucide-react';
 import { audioEngine } from '../services/audioService';
-import { ollamaService } from '../services/ollamaService';
+import { generateGroundedCopilotAnswer } from '../services/copilotAnswerService';
 import { ragService } from '../services/ragService';
 import { localStore } from '../database/localStore';
 import { AudioWaveform } from '../components/common/AudioWaveform';
+import { getActiveCopilotSessionConfig } from '../components/copilot/CreateSessionModal';
 import { TranscriptSegment, AIResponse, AnswerMode, InterviewSession } from '../types';
 
 interface LiveCopilotPageProps {
   onToggleFloating: () => void;
+  onOpenCreateSession?: () => void;
 }
 
-export const LiveCopilotPage: React.FC<LiveCopilotPageProps> = ({ onToggleFloating }) => {
+export const LiveCopilotPage: React.FC<LiveCopilotPageProps> = ({
+  onToggleFloating,
+  onOpenCreateSession,
+}) => {
+  const sessionContext = getActiveCopilotSessionConfig();
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [isMicListening, setIsMicListening] = useState(false);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const [transcripts, setTranscripts] = useState<TranscriptSegment[]>([]);
   const [aiResponses, setAiResponses] = useState<AIResponse[]>([]);
-  const [activeAnswerMode, setActiveAnswerMode] = useState<AnswerMode>('senior');
+  const [activeAnswerMode, setActiveAnswerMode] = useState<AnswerMode>(sessionContext.answerMode || 'senior');
   const [manualQuestion, setManualQuestion] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [pinnedId, setPinnedId] = useState<string | null>(null);
 
   const transcriptScrollRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   // Timer loop
   useEffect(() => {
@@ -91,7 +100,55 @@ export const LiveCopilotPage: React.FC<LiveCopilotPageProps> = ({ onToggleFloati
     setIsPaused(!isPaused);
   };
 
+  const stopMicCapture = () => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        // Ignore stop errors
+      }
+      recognitionRef.current = null;
+    }
+    setIsMicListening(false);
+  };
+
+  const toggleMicCapture = () => {
+    if (isMicListening) {
+      stopMicCapture();
+      return;
+    }
+    const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRec) return;
+
+    const rec = new SpeechRec();
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.lang = 'en-US';
+    rec.onresult = (event: any) => {
+      const lastResult = event.results[event.results.length - 1];
+      if (lastResult?.isFinal) {
+        const spokenText = String(lastResult[0]?.transcript || '').trim();
+        if (spokenText.length > 4) {
+          audioEngine.emitSegment('interviewer', spokenText);
+          if (spokenText.includes('?') || spokenText.split(' ').length >= 5) {
+            generateResponseForQuestion(spokenText);
+          }
+        }
+      }
+    };
+    rec.onerror = () => setIsMicListening(false);
+    rec.onend = () => setIsMicListening(false);
+    recognitionRef.current = rec;
+    rec.start();
+    setIsMicListening(true);
+  };
+
+  useEffect(() => {
+    return () => stopMicCapture();
+  }, []);
+
   const handleStopSession = () => {
+    stopMicCapture();
     audioEngine.stopCapture();
     setIsSessionActive(false);
 
@@ -99,8 +156,11 @@ export const LiveCopilotPage: React.FC<LiveCopilotPageProps> = ({ onToggleFloati
     if (transcripts.length > 0 || aiResponses.length > 0) {
       const newSession: InterviewSession = {
         id: `session-${Date.now()}`,
-        title: `Live Copilot Session · ${new Date().toLocaleDateString()}`,
-        role: localStore.getResume().targetRole || 'DevOps / SRE Engineer',
+        title: sessionContext.company
+          ? `${sessionContext.company} · ${sessionContext.targetRole}`
+          : `Live Copilot Session · ${new Date().toLocaleDateString()}`,
+        role: sessionContext.targetRole || localStore.getResume().targetRole || 'DevOps / SRE Engineer',
+        company: sessionContext.company || undefined,
         createdAt: new Date().toISOString(),
         durationSeconds: elapsedSeconds,
         transcripts,
@@ -134,15 +194,11 @@ export const LiveCopilotPage: React.FC<LiveCopilotPageProps> = ({ onToggleFloati
     };
     setAiResponses(prev => [placeholder, ...prev]);
 
-    let streamedContent = '';
-    const { answer, latencyMs } = await ollamaService.generateAnswer({
-      prompt: questionText,
+    const { answer, latencyMs } = await generateGroundedCopilotAnswer({
       question: questionText,
       mode: activeAnswerMode,
-      category: 'devops',
       groundedSources: sources,
       onToken: partial => {
-        streamedContent = partial;
         setAiResponses(prev =>
           prev.map(r => (r.id === responseId ? { ...r, answerText: partial } : r))
         );
@@ -199,7 +255,7 @@ export const LiveCopilotPage: React.FC<LiveCopilotPageProps> = ({ onToggleFloati
             {!isSessionActive ? (
               <button
                 onClick={handleStartSession}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md transition-colors whitespace-nowrap"
               >
                 <Play className="w-4 h-4 fill-white" />
                 <span>Start Live Session</span>
@@ -208,7 +264,7 @@ export const LiveCopilotPage: React.FC<LiveCopilotPageProps> = ({ onToggleFloati
               <>
                 <button
                   onClick={handlePauseResume}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-colors ${
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-colors whitespace-nowrap ${
                     isPaused
                       ? 'bg-amber-600 text-white border-amber-500'
                       : 'bg-neutral-800 hover:bg-neutral-750 text-neutral-200 border-neutral-700'
@@ -219,21 +275,47 @@ export const LiveCopilotPage: React.FC<LiveCopilotPageProps> = ({ onToggleFloati
                 </button>
                 <button
                   onClick={handleStopSession}
-                  className="flex items-center gap-2 px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold shadow-md transition-colors"
+                  className="flex items-center gap-2 px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold shadow-md transition-colors whitespace-nowrap"
                 >
                   <Square className="w-4 h-4 fill-white" />
                   <span>Stop & Save</span>
                 </button>
               </>
             )}
+
+            <button
+              type="button"
+              onClick={toggleMicCapture}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-colors whitespace-nowrap ${
+                isMicListening
+                  ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300'
+                  : 'bg-neutral-950 hover:bg-neutral-800 border-neutral-800 text-neutral-300'
+              }`}
+              title="Listen to live spoken questions via browser Speech Recognition"
+            >
+              <Mic className="w-3.5 h-3.5" />
+              <span>{isMicListening ? 'Listening...' : 'Live Mic'}</span>
+            </button>
+
+            {onOpenCreateSession && (
+              <button
+                type="button"
+                onClick={onOpenCreateSession}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 transition-colors whitespace-nowrap"
+                title="Set target company, role, job description, and resume context"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Context</span>
+              </button>
+            )}
           </div>
 
-          <div className="flex items-center gap-2 font-mono text-xs text-neutral-400">
+          <div className="flex items-center gap-2 font-mono text-xs text-neutral-400 tabular-nums">
             <Clock className="w-4 h-4 text-neutral-500" />
             <span className="text-white font-bold">{formatDuration(elapsedSeconds)}</span>
             <span>·</span>
-            <span className={isSessionActive ? 'text-emerald-400' : 'text-neutral-500'}>
-              {isSessionActive ? (isPaused ? 'Paused' : 'Recording Audio') : 'Session Inactive'}
+            <span className={isSessionActive || isMicListening ? 'text-emerald-400' : 'text-neutral-500'}>
+              {isMicListening ? 'Live Mic Active' : isSessionActive ? (isPaused ? 'Paused' : 'Recording Audio') : 'Session Ready'}
             </span>
           </div>
         </div>

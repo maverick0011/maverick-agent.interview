@@ -17,7 +17,7 @@ import {
   Check
 } from 'lucide-react';
 import { audioEngine, AudioVolumeTelemetry } from '../../services/audioService';
-import { ollamaService } from '../../services/ollamaService';
+import { generateGroundedCopilotAnswer } from '../../services/copilotAnswerService';
 import { ragService } from '../../services/ragService';
 import { localStore } from '../../database/localStore';
 import { TranscriptSegment, AIResponse, AnswerMode } from '../../types';
@@ -58,15 +58,11 @@ export const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ onClose })
     setIsGenerating(true);
     const sources = await ragService.findRelevantSources(questionText);
 
-    let streamedAnswer = '';
-    const { answer, latencyMs } = await ollamaService.generateAnswer({
-      prompt: questionText,
+    const { answer, latencyMs } = await generateGroundedCopilotAnswer({
       question: questionText,
       mode: answerMode,
-      category: 'sre',
       groundedSources: sources,
       onToken: partial => {
-        streamedAnswer = partial;
         setLatestResponse({
           id: `resp-${Date.now()}`,
           questionText,

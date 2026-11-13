@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   FileText, 
   Upload, 
@@ -10,7 +10,9 @@ import {
   Plus, 
   Briefcase, 
   Layers,
-  ArrowRight
+  ArrowRight,
+  Copy,
+  Check
 } from 'lucide-react';
 import { localStore } from '../database/localStore';
 import { ResumeProfile } from '../types';
@@ -22,17 +24,66 @@ export const ResumeIntelligencePage: React.FC = () => {
   const [jdMatchScore, setJdMatchScore] = useState<number | null>(null);
   const [matchedSkills, setMatchedSkills] = useState<string[]>([]);
   const [missingSkills, setMissingSkills] = useState<string[]>([]);
+  const [talkingPoints, setTalkingPoints] = useState<string[]>([]);
+  const [elevatorPitch, setElevatorPitch] = useState<string>('');
+  const [predictedQuestions, setPredictedQuestions] = useState<string[]>([]);
+  const [copiedPitch, setCopiedPitch] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSaveProfile = () => {
     localStore.saveResume(profile);
     setIsEditing(false);
   };
 
-  const handleAnalyzeJobDescription = (e: React.FormEvent) => {
+  const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const cleaned = text.replace(/\s+/g, ' ').trim().slice(0, 3500);
+    if (cleaned) {
+      const updated = { ...profile, summary: cleaned };
+      setProfile(updated);
+      localStore.saveResume(updated);
+    }
+  };
+
+  const handleAnalyzeJobDescription = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!jobDescription.trim() || isAnalyzing) return;
     setIsAnalyzing(true);
+
+    try {
+      const fullResumeText = `${profile.candidateName} - ${profile.targetRole}\n${profile.summary}\nSkills: ${profile.skills
+        .flatMap(s => s.items)
+        .join(', ')}\nExperience: ${profile.experience.flatMap(ex => ex.highlights).join(' ')}`;
+
+      const res = await fetch('/api/resume/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resumeText: fullResumeText,
+          jobDescription,
+          targetRole: profile.targetRole,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (!data.fallback && typeof data.matchScore === 'number') {
+          setJdMatchScore(data.matchScore);
+          setMatchedSkills(Array.isArray(data.matchedSkills) ? data.matchedSkills : []);
+          setMissingSkills(Array.isArray(data.missingSkills) ? data.missingSkills : []);
+          setTalkingPoints(Array.isArray(data.talkingPoints) ? data.talkingPoints : []);
+          setElevatorPitch(String(data.elevatorPitch || ''));
+          setPredictedQuestions(Array.isArray(data.interviewQuestions) ? data.interviewQuestions : []);
+          setIsAnalyzing(false);
+          return;
+        }
+      }
+    } catch {
+      // Fallback to local heuristic analyzer
+    }
 
     const jdText = jobDescription.toLowerCase();
     const candidateSkills = profile.skills.flatMap(s => s.items.map(i => i.toLowerCase()));
@@ -62,6 +113,21 @@ export const ResumeIntelligencePage: React.FC = () => {
     setJdMatchScore(Math.max(68, score));
     setMatchedSkills(matched);
     setMissingSkills(missing);
+    setTalkingPoints([
+      `Highlight hands-on production ownership across ${matched.slice(0, 3).join(', ') || 'Kubernetes & AWS'}.`,
+      'Connect infrastructure automation directly to uptime SLOs and deployment velocity metrics.',
+      missing.length > 0
+        ? `Prepare a concise ramp-up story showing transferable mastery toward ${missing.slice(0, 2).join(' and ')}.`
+        : 'Emphasize cross-team incident leadership and mentoring.',
+    ]);
+    setElevatorPitch(
+      `I'm a ${profile.targetRole} with ${profile.yearsOfExperience} years of experience scaling production cloud and Kubernetes infrastructure. Most recently, I focused on reliable CI/CD automation, observability, and resilient multi-zone architectures—and I'm excited to bring that operational discipline to this role.`
+    );
+    setPredictedQuestions([
+      'Walk me through a high-severity production incident you debugged end-to-end.',
+      'How do you design zero-downtime deployments and safe rollback guardrails?',
+      'Which observability signals matter most for keeping p99 latency and error budgets healthy?',
+    ]);
     setIsAnalyzing(false);
   };
 
@@ -90,20 +156,37 @@ export const ResumeIntelligencePage: React.FC = () => {
               </div>
             </div>
 
-            <button
-              onClick={() => {
-                if (isEditing) handleSaveProfile();
-                else setIsEditing(true);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                isEditing
-                  ? 'bg-emerald-600 border-emerald-500 text-white'
-                  : 'bg-neutral-850 hover:bg-neutral-800 border-neutral-750 text-neutral-200'
-              }`}
-            >
-              {isEditing ? <Save className="w-3.5 h-3.5" /> : <Edit3 className="w-3.5 h-3.5 text-indigo-400" />}
-              <span>{isEditing ? 'Save Profile' : 'Edit Profile'}</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,.md,.json"
+                onChange={handleResumeUpload}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 transition-colors"
+              >
+                <Upload className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Upload (.txt/.md)</span>
+              </button>
+              <button
+                onClick={() => {
+                  if (isEditing) handleSaveProfile();
+                  else setIsEditing(true);
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                  isEditing
+                    ? 'bg-emerald-600 border-emerald-500 text-white'
+                    : 'bg-neutral-850 hover:bg-neutral-800 border-neutral-750 text-neutral-200'
+                }`}
+              >
+                {isEditing ? <Save className="w-3.5 h-3.5" /> : <Edit3 className="w-3.5 h-3.5 text-indigo-400" />}
+                <span>{isEditing ? 'Save Profile' : 'Edit Profile'}</span>
+              </button>
+            </div>
           </div>
 
           {/* Professional Summary */}
@@ -245,6 +328,61 @@ export const ResumeIntelligencePage: React.FC = () => {
                       </span>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Elevator Pitch */}
+              {elevatorPitch && (
+                <div className="pt-3 border-t border-neutral-800 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-indigo-300">
+                      60-Second Elevator Pitch
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(elevatorPitch);
+                        setCopiedPitch(true);
+                        setTimeout(() => setCopiedPitch(false), 2000);
+                      }}
+                      className="text-[11px] text-neutral-400 hover:text-white flex items-center gap-1"
+                    >
+                      {copiedPitch ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedPitch ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                  <p className="text-xs text-neutral-300 leading-relaxed">{elevatorPitch}</p>
+                </div>
+              )}
+
+              {/* Key Talking Points */}
+              {talkingPoints.length > 0 && (
+                <div className="pt-3 border-t border-neutral-800 space-y-1.5">
+                  <span className="text-[11px] font-bold text-neutral-200 block">
+                    Recommended Talking Points
+                  </span>
+                  <ul className="space-y-1 text-xs text-neutral-300 list-disc list-inside">
+                    {talkingPoints.map((tp, idx) => (
+                      <li key={idx}>{tp}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Predicted Interview Questions */}
+              {predictedQuestions.length > 0 && (
+                <div className="pt-3 border-t border-neutral-800 space-y-1.5">
+                  <span className="text-[11px] font-bold text-cyan-300 block">
+                    Likely Interview Questions
+                  </span>
+                  <ul className="space-y-1.5 text-xs text-neutral-300">
+                    {predictedQuestions.map((q, idx) => (
+                      <li key={idx} className="flex items-start gap-2">
+                        <span className="font-mono text-indigo-400 text-[11px] mt-0.5">0{idx + 1}</span>
+                        <span>{q}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </div>

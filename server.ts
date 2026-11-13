@@ -219,6 +219,159 @@ ${priorTexts.length > 0 ? priorTexts.map((q, idx) => `- ${idx + 1}. ${q}`).join(
   }
 });
 
+// --- Server-Side Gemini Live Interview Copilot Answer Synthesis ---
+app.post('/api/copilot/answer', async (req: Request, res: Response) => {
+  const {
+    question = '',
+    mode = 'senior',
+    company = '',
+    targetRole = 'Senior DevOps / SRE Engineer',
+    jobDescription = '',
+    resumeSummary = '',
+    groundedSnippets = [],
+  } = req.body || {};
+
+  const cleanQuestion = String(question).trim();
+  if (!cleanQuestion) {
+    return res.status(400).json({ error: 'Question text is required.' });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(200).json({
+      answer: '',
+      fallback: true,
+      reason: 'GEMINI_API_KEY not configured.',
+    });
+  }
+
+  const startedAt = Date.now();
+  try {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const modeInstructions: Record<string, string> = {
+      senior: 'Provide a concise, authoritative Senior/Staff Engineer answer with 3-4 scannable talking points and concrete metrics or commands.',
+      crisp: 'Keep the answer ultra-concise (under 90 words) with 3 sharp bullet points so the candidate can glance and speak immediately.',
+      star: 'Structure the answer explicitly using Situation, Task, Action, and Result with quantifiable production outcomes.',
+      troubleshooting: 'Provide a step-by-step triage order: immediate mitigation, diagnostic commands, root cause isolation, and long-term prevention.',
+      architecture: 'Outline high-level components, data flow, reliability/failover tradeoffs, and scaling considerations.',
+    };
+
+    const snippetsText = Array.isArray(groundedSnippets) && groundedSnippets.length > 0
+      ? groundedSnippets.map((s: unknown, i: number) => `[${i + 1}] ${String(s)}`).join('\n')
+      : 'None provided';
+
+    const prompt = `Interviewer Question: "${cleanQuestion}"
+
+Candidate Target Role: ${targetRole}${company ? ` at ${company}` : ''}
+Answer Mode: ${mode} — ${modeInstructions[String(mode)] || modeInstructions.senior}
+
+Candidate Background / Resume Summary:
+${String(resumeSummary || 'Experienced Cloud, Kubernetes, and DevOps Engineer').slice(0, 1500)}
+
+Target Job Description Context:
+${String(jobDescription || 'Not specified').slice(0, 1500)}
+
+Relevant Grounded Knowledge Snippets:
+${snippetsText}
+
+Write a direct, spoken-ready interview response that sounds natural when delivered out loud. Lead with a strong 1-sentence direct answer, followed by concise bullet points.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      contents: prompt,
+      config: {
+        systemInstruction: 'You are a real-time technical interview copilot. Produce accurate, spoken-ready, scannable answers tailored to the candidate background without fluff or preamble.',
+      },
+    });
+
+    const answer = (response.text ?? '').trim();
+    return res.json({
+      answer,
+      latencyMs: Date.now() - startedAt,
+      source: 'gemini',
+      fallback: !answer,
+    });
+  } catch (error) {
+    return res.status(200).json({
+      answer: '',
+      fallback: true,
+      reason: error instanceof Error ? error.message : 'Copilot synthesis failed',
+    });
+  }
+});
+
+// --- Server-Side Gemini Resume & Job Description Analyzer ---
+app.post('/api/resume/analyze', async (req: Request, res: Response) => {
+  const { resumeText = '', jobDescription = '', targetRole = '' } = req.body || {};
+  if (!String(jobDescription).trim()) {
+    return res.status(400).json({ error: 'Job description is required.' });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(200).json({ fallback: true });
+  }
+
+  try {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const prompt = `Analyze alignment between this candidate resume and job description.
+Target Role: ${String(targetRole || 'Cloud / DevOps Engineer')}
+
+Resume:
+${String(resumeText).slice(0, 4000)}
+
+Job Description:
+${String(jobDescription).slice(0, 4000)}
+
+Return an accurate matchScore (0-100), matchedSkills, missingSkills, 3 tailored talkingPoints to emphasize, a crisp 60-second spoken elevatorPitch, and 4 likely interviewQuestions.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      contents: prompt,
+      config: {
+        systemInstruction: 'You are an executive technical career coach. Return strict JSON matching the schema.',
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            matchScore: { type: Type.INTEGER },
+            matchedSkills: { type: Type.ARRAY, items: { type: Type.STRING } },
+            missingSkills: { type: Type.ARRAY, items: { type: Type.STRING } },
+            talkingPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
+            elevatorPitch: { type: Type.STRING },
+            interviewQuestions: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ['matchScore', 'matchedSkills', 'missingSkills', 'talkingPoints', 'elevatorPitch', 'interviewQuestions'],
+        },
+      },
+    });
+
+    const parsed = JSON.parse((response.text ?? '{}').trim());
+    return res.json({ ...parsed, source: 'gemini', fallback: false });
+  } catch (error) {
+    return res.status(200).json({
+      fallback: true,
+      reason: error instanceof Error ? error.message : 'Resume analysis failed',
+    });
+  }
+});
+
 // --- External Evaluator Proxy (Optional if EVALUATOR_ENDPOINT is configured) ---
 app.post('/api/mock-interview/evaluate', async (req: Request, res: Response) => {
   const endpoint = req.body?.endpoint || EVALUATOR_ENDPOINT;
