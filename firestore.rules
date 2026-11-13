@@ -33,7 +33,7 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdminEmail() {
-      return isEmailVerified() && request.auth.token.email in [
+      return isEmailVerified() && request.auth.token.email.lower() in [
         'mavbharath01@gmail.com',
         'bharath.hkumar51@gmail.com',
         'admin@cloudnativeacademy.in'
@@ -225,7 +225,7 @@ service cloud.firestore {
         && isOwner(userId)
         && isValidUser(incoming())
         && incoming().uid == request.auth.uid
-        && incoming().email == request.auth.token.email
+        && incoming().email.lower() == request.auth.token.email.lower()
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
         && (
@@ -269,7 +269,7 @@ service cloud.firestore {
         && isValidAccessRequest(incoming())
         && incoming().id == requestId
         && incoming().userId == request.auth.uid
-        && incoming().email == request.auth.token.email
+        && incoming().email.lower() == request.auth.token.email.lower()
         && incoming().status == 'pending'
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;

@@ -60,57 +60,50 @@ function toIsoString(val: unknown): string {
 }
 
 class FirestoreService {
+  private pendingUserSync = new Map<string, Promise<UserProfile>>();
+
   isAuthenticated(): boolean {
     return !!auth.currentUser;
   }
 
   async syncAuthenticatedUser(firebaseUser: FirebaseUser): Promise<UserProfile> {
     const uid = sanitizeId(firebaseUser.uid);
-    const email = (firebaseUser.email || '').trim().toLowerCase();
-    const fullName = (firebaseUser.displayName || email.split('@')[0] || 'Candidate').slice(0, 120);
+    const existingPromise = this.pendingUserSync.get(uid);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const syncPromise = this.performSyncAuthenticatedUser(firebaseUser, uid).finally(() => {
+      this.pendingUserSync.delete(uid);
+    });
+    this.pendingUserSync.set(uid, syncPromise);
+    return syncPromise;
+  }
+
+  private async performSyncAuthenticatedUser(
+    firebaseUser: FirebaseUser,
+    uid: string
+  ): Promise<UserProfile> {
+    const tokenEmail = (firebaseUser.email || '').trim();
+    const email = tokenEmail.toLowerCase();
+    const fullName = (firebaseUser.displayName || email.split('@')[0] || 'Candidate').trim().slice(0, 120) || 'Candidate';
     const avatarUrl = (firebaseUser.photoURL || 'https://lh3.googleusercontent.com/a/default-user').slice(0, 500);
     const adminByEmail = isAdminEmail(email);
 
     const userPath = `users/${uid}`;
     const userRef = doc(db, 'users', uid);
 
+    let snap;
     try {
-      const snap = await getDoc(userRef);
+      snap = await getDoc(userRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, userPath);
+    }
 
-      if (snap.exists()) {
-        const data = snap.data();
-        const resolvedRole = adminByEmail ? 'admin' : (data.role as 'admin' | 'student') || 'student';
-        const resolvedApproved = adminByEmail ? true : Boolean(data.isApproved);
-
-        // If bootstrapped admin logged in, ensure /admins/{uid} exists
-        if (adminByEmail) {
-          await this.ensureAdminRecord(uid, email);
-        }
-
-        return {
-          id: uid,
-          fullName: String(data.fullName || fullName),
-          email: String(data.email || email),
-          role: resolvedRole,
-          isApproved: resolvedApproved,
-          avatarUrl: String(data.avatarUrl || avatarUrl),
-        };
-      }
-
-      // First-time sign-in: create /users/{uid}
-      const initialRole = adminByEmail ? 'admin' : 'student';
-      const initialApproved = adminByEmail ? true : false;
-
-      await setDoc(userRef, {
-        uid,
-        fullName,
-        email,
-        role: initialRole,
-        isApproved: initialApproved,
-        avatarUrl,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+    if (snap.exists()) {
+      const data = snap.data();
+      const resolvedRole = adminByEmail ? 'admin' : (data.role as 'admin' | 'student') || 'student';
+      const resolvedApproved = adminByEmail ? true : Boolean(data.isApproved);
 
       if (adminByEmail) {
         await this.ensureAdminRecord(uid, email);
@@ -118,31 +111,67 @@ class FirestoreService {
 
       return {
         id: uid,
+        fullName: String(data.fullName || fullName),
+        email: String(data.email || email),
+        role: resolvedRole,
+        isApproved: resolvedApproved,
+        avatarUrl: String(data.avatarUrl || avatarUrl),
+      };
+    }
+
+    // First-time sign-in: create /users/{uid}
+    const initialRole = adminByEmail ? 'admin' : 'student';
+    const initialApproved = adminByEmail ? true : false;
+
+    try {
+      await setDoc(userRef, {
+        uid,
         fullName,
-        email,
+        email: tokenEmail || email,
         role: initialRole,
         isApproved: initialApproved,
         avatarUrl,
-      };
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, userPath);
+      handleFirestoreError(error, OperationType.CREATE, userPath);
     }
+
+    if (adminByEmail) {
+      await this.ensureAdminRecord(uid, email);
+    }
+
+    return {
+      id: uid,
+      fullName,
+      email,
+      role: initialRole,
+      isApproved: initialApproved,
+      avatarUrl,
+    };
   }
 
   private async ensureAdminRecord(uid: string, email: string): Promise<void> {
     const adminPath = `admins/${uid}`;
+    const adminRef = doc(db, 'admins', uid);
+    let snap;
     try {
-      const adminRef = doc(db, 'admins', uid);
-      const snap = await getDoc(adminRef);
-      if (!snap.exists()) {
+      snap = await getDoc(adminRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, adminPath);
+    }
+
+    if (!snap.exists()) {
+      try {
         await setDoc(adminRef, {
           uid,
           email: email.slice(0, 180),
           createdAt: serverTimestamp(),
         });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, adminPath);
       }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, adminPath);
     }
   }
 
@@ -254,10 +283,12 @@ class FirestoreService {
       const cleanQuestions = stripUndefined(attempt.questions).slice(0, 30);
       const cleanAnswers = stripUndefined(attempt.answers).slice(0, 30);
 
+      const candidateName = (attempt.candidateName || 'Candidate').trim().slice(0, 120) || 'Candidate';
+
       await setDoc(doc(db, 'interview_attempts', attemptId), {
         id: attemptId,
         userId: uid,
-        candidateName: attempt.candidateName.slice(0, 120),
+        candidateName,
         track: attempt.track,
         seniority: attempt.seniority,
         selectedTopics: attempt.selectedTopics.slice(0, 10),
@@ -279,16 +310,20 @@ class FirestoreService {
         updatedAt: serverTimestamp(),
       });
 
-      // Record question hashes in user_question_history
+      // Record question hashes in user_question_history (skip if already recorded since history is immutable)
       for (const q of attempt.questions.slice(0, 30)) {
         const histId = sanitizeId(`qh_${uid}_${q.hash}`);
-        await setDoc(doc(db, 'user_question_history', histId), {
-          id: histId,
-          userId: uid,
-          questionHash: q.hash.slice(0, 128),
-          topic: String(q.topic).slice(0, 64),
-          askedAt: serverTimestamp(),
-        });
+        const histRef = doc(db, 'user_question_history', histId);
+        const histSnap = await getDoc(histRef);
+        if (!histSnap.exists()) {
+          await setDoc(histRef, {
+            id: histId,
+            userId: uid,
+            questionHash: q.hash.slice(0, 128),
+            topic: String(q.topic).slice(0, 64),
+            askedAt: serverTimestamp(),
+          });
+        }
       }
 
       // Upsert user_interview_status enforcing high-water Completed rule

@@ -77,6 +77,7 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
     loadLocalSnapshot();
 
     let unsubscribeFirestore: (() => void) | undefined;
+    const activeUser = localStore.getCurrentUser();
     if (firestoreService.isAuthenticated()) {
       firestoreService
         .getInterviewSettings()
@@ -88,23 +89,25 @@ export const AdminDashboardModal: React.FC<AdminDashboardModalProps> = ({
         })
         .catch(() => {});
 
-      unsubscribeFirestore = firestoreService.subscribeAdminData({
-        onRequests: reqs => {
-          if (reqs.length > 0) setRequests(reqs);
-        },
-        onLogs: logs => {
-          if (logs.length > 0) setActivityLogs(logs);
-        },
-        onAttempts: atts => {
-          if (atts.length > 0) setAttempts(atts);
-        },
-        onStatuses: stats => {
-          if (stats.length > 0) setStatuses(stats);
-        },
-        onFeeds: feeds => {
-          setProctoredFeeds(feeds);
-        },
-      });
+      if (activeUser.role === 'admin') {
+        unsubscribeFirestore = firestoreService.subscribeAdminData({
+          onRequests: reqs => {
+            if (reqs.length > 0) setRequests(reqs);
+          },
+          onLogs: logs => {
+            if (logs.length > 0) setActivityLogs(logs);
+          },
+          onAttempts: atts => {
+            if (atts.length > 0) setAttempts(atts);
+          },
+          onStatuses: stats => {
+            if (stats.length > 0) setStatuses(stats);
+          },
+          onFeeds: feeds => {
+            setProctoredFeeds(feeds);
+          },
+        });
+      }
     }
 
     return () => {
