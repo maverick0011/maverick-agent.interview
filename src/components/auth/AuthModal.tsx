@@ -1,26 +1,23 @@
 /**
- * Google SSO Authentication Portal
- * Google Identity Single Sign-On (SSO) as the exclusive login gateway.
- * Designates mavbharath01@gmail.com as the platform administrator with
- * privileges to monitor student activities and watch live mock interview video feeds.
+ * Firebase Google Authentication Modal
+ * Uses Firebase Auth (signInWithPopup + GoogleAuthProvider) and Cloud Firestore user profiles.
  */
 
 import React, { useState } from 'react';
-import { 
-  X, 
-  ShieldCheck, 
-  UserCheck, 
-  Lock, 
-  Clock, 
-  ArrowRight,
+import {
+  X,
   LogOut,
-  ChevronRight,
-  Sparkles,
   CheckCircle2,
-  AlertCircle
+  Clock,
+  AlertCircle,
+  Loader2,
+  ShieldCheck,
 } from 'lucide-react';
-import { localStore, isAdminEmail, DEFAULT_ADMIN_USER, DEFAULT_STUDENT_USER } from '../../database/localStore';
-import { UserProfile, AccessRequest } from '../../types';
+import { signInWithPopup, signOut } from 'firebase/auth';
+import { auth, googleProvider } from '../../services/firebase';
+import { firestoreService } from '../../services/firestoreService';
+import { localStore, DEFAULT_STUDENT_USER } from '../../database/localStore';
+import { UserProfile } from '../../types';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -28,7 +25,6 @@ interface AuthModalProps {
   onUserChanged: (user: UserProfile) => void;
 }
 
-// Google Official 4-Color SVG Icon
 export const GoogleLogoIcon: React.FC<{ className?: string }> = ({ className = 'w-5 h-5' }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
@@ -55,147 +51,103 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onClose,
   onUserChanged,
 }) => {
-  const [mode, setMode] = useState<'sso_picker' | 'custom_google' | 'request_flow'>('sso_picker');
-  const [customEmail, setCustomEmail] = useState('');
-  const [customName, setCustomName] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [targetRole, setTargetRole] = useState('DevOps Engineer');
   const [reason, setReason] = useState('');
-  const [pendingNotice, setPendingNotice] = useState<string | null>(null);
+  const [requestSubmitted, setRequestSubmitted] = useState(false);
 
   if (!isOpen) return null;
 
   const currentUser = localStore.getCurrentUser();
+  const isFirebaseSignedIn = !!auth.currentUser;
 
-  // 1. Sign In as Designated Admin: mavbharath01@gmail.com
-  const handleSignInAsAdmin = () => {
-    const adminUser = { ...DEFAULT_ADMIN_USER };
-    localStore.setCurrentUser(adminUser);
-    localStore.logUserActivity({
-      userId: adminUser.id,
-      userEmail: adminUser.email,
-      userName: adminUser.fullName,
-      action: 'login',
-      description: 'Admin logged in via Google SSO (Full Proctoring & Assessment Access)',
-    });
-    onUserChanged(adminUser);
-    onClose();
-  };
+  const handleGoogleSignIn = async () => {
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const profile = await firestoreService.syncAuthenticatedUser(result.user);
+      localStore.setCurrentUser(profile);
 
-  // 2. Sign In as Pre-Approved Candidate
-  const handleSignInAsStudent = () => {
-    const studentUser = { ...DEFAULT_STUDENT_USER };
-    localStore.setCurrentUser(studentUser);
-    localStore.logUserActivity({
-      userId: studentUser.id,
-      userEmail: studentUser.email,
-      userName: studentUser.fullName,
-      action: 'login',
-      description: 'Approved student signed in via Google SSO',
-    });
-    onUserChanged(studentUser);
-    onClose();
-  };
-
-  // 3. Custom Google Account Sign-In
-  const handleCustomGoogleSignIn = (e: React.FormEvent) => {
-    e.preventDefault();
-    const email = customEmail.trim().toLowerCase();
-    const name = customName.trim() || email.split('@')[0];
-
-    if (!email) return;
-
-    // Check if this is the admin email (mavbharath01@gmail.com)
-    if (isAdminEmail(email)) {
-      const adminUser: UserProfile = {
-        id: 'user-admin-bharath',
-        fullName: name || 'Bharath H Kumar',
-        email,
-        role: 'admin',
-        isApproved: true,
-        avatarUrl: 'https://lh3.googleusercontent.com/a/default-user',
-      };
-      localStore.setCurrentUser(adminUser);
-      localStore.logUserActivity({
-        userId: adminUser.id,
-        userEmail: adminUser.email,
-        userName: adminUser.fullName,
+      await firestoreService.logActivity({
+        userId: profile.id,
+        userEmail: profile.email,
+        userName: profile.fullName,
         action: 'login',
-        description: 'Admin logged in via Google SSO',
+        description: `Signed in with Google (${profile.role === 'admin' ? 'Administrator' : 'Candidate'})`,
       });
-      onUserChanged(adminUser);
-      onClose();
-      return;
+
+      onUserChanged(profile);
+      if (profile.role === 'admin' || profile.isApproved) {
+        onClose();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Google Sign-In failed';
+      setErrorMsg(msg);
+    } finally {
+      setIsLoading(false);
     }
-
-    // Check if already approved by mavbharath01@gmail.com
-    const requests = localStore.getAccessRequests();
-    const existingApproved = requests.find(r => r.email.toLowerCase() === email && r.status === 'approved');
-
-    if (existingApproved) {
-      const approvedStudent: UserProfile = {
-        id: `user-${email.replace(/[^a-zA-Z0-9]/g, '_')}`,
-        fullName: existingApproved.fullName || name,
-        email,
-        role: 'student',
-        isApproved: true,
-        avatarUrl: 'https://lh3.googleusercontent.com/a/default-user',
-      };
-      localStore.setCurrentUser(approvedStudent);
-      localStore.logUserActivity({
-        userId: approvedStudent.id,
-        userEmail: approvedStudent.email,
-        userName: approvedStudent.fullName,
-        action: 'login',
-        description: 'Approved candidate signed in via Google SSO',
-      });
-      onUserChanged(approvedStudent);
-      onClose();
-      return;
-    }
-
-    // Otherwise, transition to enrollment request for mavbharath01@gmail.com to approve
-    setMode('request_flow');
   };
 
-  // 4. Submit Candidate Request to mavbharath01@gmail.com
-  const handleCompleteRequest = (e: React.FormEvent) => {
+  const handleSignOut = async () => {
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      await signOut(auth);
+      const guest = { ...DEFAULT_STUDENT_USER };
+      localStore.setCurrentUser(guest);
+      onUserChanged(guest);
+      setRequestSubmitted(false);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Sign-out failed');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSubmitAccessRequest = async (e: React.FormEvent) => {
     e.preventDefault();
-    const email = customEmail.trim().toLowerCase();
-    const name = customName.trim() || email.split('@')[0];
+    if (!auth.currentUser) return;
 
-    const req = localStore.submitAccessRequest({
-      fullName: name,
-      email,
-      targetRole,
-      reason: reason.trim() || 'Student mock interview preparation cohort 2026',
-    });
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      const req = await firestoreService.submitAccessRequest({
+        userId: currentUser.id,
+        fullName: currentUser.fullName,
+        email: currentUser.email,
+        targetRole,
+        reason: reason.trim() || 'Mock interview assessment cohort access request',
+      });
 
-    const pendingUser: UserProfile = {
-      id: `user-${email.replace(/[^a-zA-Z0-9]/g, '_')}`,
-      fullName: name,
-      email,
-      role: 'student',
-      isApproved: false,
-      avatarUrl: 'https://lh3.googleusercontent.com/a/default-user',
-    };
+      localStore.submitAccessRequest({
+        fullName: req.fullName,
+        email: req.email,
+        targetRole: req.targetRole,
+        reason: req.reason,
+      });
 
-    localStore.setCurrentUser(pendingUser);
-    localStore.logUserActivity({
-      userId: pendingUser.id,
-      userEmail: pendingUser.email,
-      userName: pendingUser.fullName,
-      action: 'access_requested',
-      description: `New candidate registered via Google SSO. Awaiting approval by mavbharath01@gmail.com`,
-    });
+      await firestoreService.logActivity({
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        userName: currentUser.fullName,
+        action: 'access_requested',
+        description: `Submitted enrollment request for ${targetRole}`,
+      });
 
-    onUserChanged(pendingUser);
-    setPendingNotice(email);
+      setRequestSubmitted(true);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to submit access request');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-scale-in">
-        {/* Header with Google SSO Branding */}
+        {/* Header */}
         <div className="px-6 py-5 border-b border-neutral-800 bg-neutral-950 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-white rounded-xl shadow-sm border border-neutral-200">
@@ -204,14 +156,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-bold text-white tracking-tight">
-                  Google SSO Authentication
+                  Google Authentication
                 </h2>
-                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
-                  Exclusive SSO
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
+                  Firebase Auth
                 </span>
               </div>
               <p className="text-[11px] text-neutral-400">
-                Single Sign-On for students & administrator
+                Cloud Firestore synced session & interview history
               </p>
             </div>
           </div>
@@ -223,244 +175,134 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </button>
         </div>
 
-        {/* Current User Session Status */}
-        <div className="px-6 py-3 bg-neutral-950/60 border-b border-neutral-800/80 flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2">
-            <span className="text-neutral-400">Active Google User:</span>
-            <span className="font-bold text-white max-w-[150px] truncate">{currentUser.fullName}</span>
-          </div>
-          <span className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase font-bold border ${
-            currentUser.role === 'admin'
-              ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-              : currentUser.isApproved
-              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-              : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-          }`}>
-            {currentUser.role === 'admin' ? 'Administrator' : currentUser.isApproved ? 'Approved Student' : 'Pending Approval'}
-          </span>
-        </div>
-
-        {/* Modal Body */}
+        {/* Body */}
         <div className="p-6 space-y-4">
-          {pendingNotice ? (
-            /* Pending Approval State Notice */
-            <div className="space-y-4 text-center py-2 animate-fade-in">
-              <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
-                <Clock className="w-6 h-6 animate-pulse" />
-              </div>
-              <div className="space-y-1">
-                <h3 className="text-sm font-bold text-white">
-                  Google SSO Verified: Awaiting Approval
-                </h3>
-                <p className="text-xs text-neutral-300">
-                  Your Google identity <strong className="text-white">{pendingNotice}</strong> has been authenticated.
-                </p>
-                <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-xl text-[11px] text-neutral-400 text-left space-y-1 mt-2">
-                  <span className="font-semibold text-amber-300 block">Administrator Approval Gate:</span>
-                  <p>
-                    All candidate accounts must be approved by the platform administrator (<strong className="text-white">mavbharath01@gmail.com</strong>).
-                    Once approved, your full access to the AI interview copilot and mock interview simulator unlocks automatically.
-                  </p>
-                </div>
-              </div>
-
-              <div className="pt-2 flex flex-col gap-2">
-                <button
-                  onClick={handleSignInAsAdmin}
-                  className="w-full py-2.5 bg-amber-600 hover:bg-amber-500 text-black rounded-xl text-xs font-bold shadow-md transition-colors flex items-center justify-center gap-2"
-                >
-                  <Lock className="w-3.5 h-3.5 text-black" />
-                  <span>Log in as mavbharath01@gmail.com (Admin)</span>
-                </button>
-                <button
-                  onClick={() => setPendingNotice(null)}
-                  className="text-xs text-neutral-500 hover:text-neutral-300 py-1"
-                >
-                  Sign in with a different Google account
-                </button>
-              </div>
+          {errorMsg && (
+            <div className="p-3 bg-rose-950/40 border border-rose-500/40 rounded-xl text-xs text-rose-200 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span className="break-words">{errorMsg}</span>
             </div>
-          ) : mode === 'sso_picker' ? (
-            /* Mode 1: Quick Google Account Selector */
+          )}
+
+          {isFirebaseSignedIn ? (
             <div className="space-y-4">
-              <div className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">
-                Select Google Workspace / Gmail Account
+              <div className="p-4 bg-neutral-950 border border-neutral-800 rounded-xl flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  {currentUser.avatarUrl ? (
+                    <img
+                      src={currentUser.avatarUrl}
+                      alt={currentUser.fullName}
+                      className="w-10 h-10 rounded-full border border-neutral-700 object-cover shrink-0"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300 font-bold text-xs shrink-0">
+                      {currentUser.fullName.slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-white truncate">{currentUser.fullName}</div>
+                    <div className="text-[11px] font-mono text-neutral-400 truncate">{currentUser.email}</div>
+                  </div>
+                </div>
+
+                <span className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase font-bold border shrink-0 ${
+                  currentUser.role === 'admin'
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                    : currentUser.isApproved
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                    : 'bg-neutral-800 border-neutral-700 text-neutral-300'
+                }`}>
+                  {currentUser.role === 'admin' ? 'Admin' : currentUser.isApproved ? 'Approved' : 'Candidate'}
+                </span>
               </div>
 
-              {/* 1. Admin Account: mavbharath01@gmail.com */}
-              <button
-                onClick={handleSignInAsAdmin}
-                className="w-full p-3.5 bg-neutral-950 hover:bg-neutral-850 border border-amber-600/40 hover:border-amber-500 rounded-xl text-left transition-all flex items-center justify-between group shadow-sm"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-300 font-bold text-xs shrink-0">
-                    BK
+              {currentUser.role !== 'admin' && !currentUser.isApproved && !requestSubmitted && (
+                <form onSubmit={handleSubmitAccessRequest} className="p-4 bg-neutral-950/70 border border-neutral-800 rounded-xl space-y-3">
+                  <div className="text-xs font-semibold text-white">
+                    Complete Candidate Track Enrollment
                   </div>
-                  <div className="space-y-0.5">
-                    <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <span>Bharath H Kumar</span>
-                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 uppercase">
-                        Admin
-                      </span>
-                    </div>
-                    <div className="text-[11px] font-mono text-amber-200/90 font-medium">
-                      mavbharath01@gmail.com
-                    </div>
-                    <p className="text-[10px] text-neutral-400">
-                      Live student video assessment & user activity monitor
-                    </p>
+                  <div>
+                    <label className="text-[11px] text-neutral-400 block mb-1">Target Role</label>
+                    <select
+                      value={targetRole}
+                      onChange={e => setTargetRole(e.target.value)}
+                      className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="DevOps Engineer">DevOps Engineer</option>
+                      <option value="Site Reliability Engineer (SRE)">Site Reliability Engineer (SRE)</option>
+                      <option value="Kubernetes Platform Specialist">Kubernetes Platform Specialist</option>
+                      <option value="Cloud Infrastructure Architect">Cloud Infrastructure Architect</option>
+                    </select>
                   </div>
-                </div>
-                <ArrowRight className="w-4 h-4 text-neutral-500 group-hover:text-amber-400 transition-colors shrink-0" />
-              </button>
+                  <div>
+                    <label className="text-[11px] text-neutral-400 block mb-1">Cohort / Notes</label>
+                    <textarea
+                      rows={2}
+                      value={reason}
+                      onChange={e => setReason(e.target.value)}
+                      placeholder="Optional cohort or interview track notes..."
+                      className="w-full bg-neutral-900 border border-neutral-800 rounded-lg p-2.5 text-xs text-white placeholder-neutral-600 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold transition-colors"
+                  >
+                    {isLoading ? 'Submitting...' : 'Submit Enrollment Request'}
+                  </button>
+                </form>
+              )}
 
-              {/* 2. Candidate Account: alex.mercer@gmail.com */}
-              <button
-                onClick={handleSignInAsStudent}
-                className="w-full p-3.5 bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 hover:border-indigo-500/50 rounded-xl text-left transition-all flex items-center justify-between group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-300 font-bold text-xs shrink-0">
-                    AM
-                  </div>
-                  <div className="space-y-0.5">
-                    <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <span>Alex Mercer</span>
-                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
-                        Approved
-                      </span>
-                    </div>
-                    <div className="text-[11px] font-mono text-neutral-300">
-                      alex.mercer@gmail.com
-                    </div>
-                    <p className="text-[10px] text-neutral-400">
-                      Mock interview candidate (Assessed by mavbharath01@gmail.com)
-                    </p>
-                  </div>
+              {requestSubmitted && (
+                <div className="p-3 bg-emerald-950/30 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>Enrollment request submitted to Firestore.</span>
                 </div>
-                <ArrowRight className="w-4 h-4 text-neutral-500 group-hover:text-indigo-400 transition-colors shrink-0" />
-              </button>
+              )}
 
-              {/* Custom Google Account button */}
-              <div className="pt-2">
+              <div className="flex items-center gap-2 pt-1">
                 <button
-                  onClick={() => setMode('custom_google')}
-                  className="w-full py-2.5 bg-neutral-950 hover:bg-neutral-850 border border-neutral-800 text-neutral-300 hover:text-white rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2"
+                  onClick={handleSignOut}
+                  disabled={isLoading}
+                  className="flex-1 py-2.5 bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 hover:text-white rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2"
                 >
-                  <GoogleLogoIcon className="w-4 h-4" />
-                  <span>Use another Google account</span>
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sign Out</span>
                 </button>
-              </div>
-
-              {/* Notice regarding mavbharath01@gmail.com */}
-              <div className="p-3 bg-neutral-950/80 border border-neutral-850 rounded-xl text-[11px] text-neutral-400 leading-relaxed">
-                <span className="text-neutral-300 font-semibold block">Google SSO Security Policy:</span>
-                Admin <strong className="text-amber-300">mavbharath01@gmail.com</strong> is the sole authorized user who can view real-time student activity and assess students via live mock interview video feeds.
+                <button
+                  onClick={onClose}
+                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-colors"
+                >
+                  Continue
+                </button>
               </div>
             </div>
-          ) : mode === 'custom_google' ? (
-            /* Mode 2: Custom Google Account Sign-In */
-            <form onSubmit={handleCustomGoogleSignIn} className="space-y-3">
-              <div className="text-xs text-neutral-400">
-                Sign in with your Google Workspace or Gmail address:
-              </div>
-
-              <div>
-                <label className="text-xs text-neutral-300 block mb-1">Google Email Address</label>
-                <div className="relative">
-                  <input
-                    type="email"
-                    required
-                    placeholder="e.g. yourname@gmail.com"
-                    value={customEmail}
-                    onChange={e => setCustomEmail(e.target.value)}
-                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-3 pr-8 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
-                  />
-                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
-                    <GoogleLogoIcon className="w-3.5 h-3.5" />
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs text-neutral-300 block mb-1">Full Name</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Sumanth Rao"
-                  value={customName}
-                  onChange={e => setCustomName(e.target.value)}
-                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div className="pt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setMode('sso_picker')}
-                  className="px-4 py-2 bg-neutral-800 hover:bg-neutral-750 text-neutral-300 rounded-xl text-xs font-semibold"
-                >
-                  Back
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md transition-colors flex items-center justify-center gap-2"
-                >
-                  <GoogleLogoIcon className="w-3.5 h-3.5" />
-                  <span>Authenticate with Google</span>
-                </button>
-              </div>
-            </form>
           ) : (
-            /* Mode 3: Student Request for mavbharath01@gmail.com */
-            <form onSubmit={handleCompleteRequest} className="space-y-3">
-              <div className="p-3 bg-indigo-950/20 border border-indigo-500/30 rounded-xl text-xs space-y-1">
-                <div className="font-semibold text-white">Google SSO Verified: {customEmail}</div>
-                <p className="text-[11px] text-neutral-400">
-                  Select your engineering track to request platform access from administrator <strong className="text-amber-300">mavbharath01@gmail.com</strong>.
+            <div className="space-y-4">
+              <div className="p-4 bg-neutral-950 border border-neutral-800 rounded-xl space-y-2 text-xs text-neutral-300">
+                <div className="flex items-center gap-2 font-semibold text-white">
+                  <ShieldCheck className="w-4 h-4 text-indigo-400" />
+                  <span>Sign in with Google</span>
+                </div>
+                <p className="text-[11px] text-neutral-400 leading-relaxed">
+                  Authenticate with your Google account to save mock interview attempts, question history, and evaluation analytics to Cloud Firestore.
                 </p>
               </div>
 
-              <div>
-                <label className="text-xs text-neutral-300 block mb-1">Target Engineering Role</label>
-                <select
-                  value={targetRole}
-                  onChange={e => setTargetRole(e.target.value)}
-                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="DevOps Engineer">DevOps Engineer</option>
-                  <option value="Site Reliability Engineer (SRE)">Site Reliability Engineer (SRE)</option>
-                  <option value="Kubernetes Platform Specialist">Kubernetes Platform Specialist</option>
-                  <option value="Cloud Infrastructure Architect">Cloud Infrastructure Architect</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-xs text-neutral-300 block mb-1">Cohort / Reason for Access</label>
-                <textarea
-                  rows={2}
-                  placeholder="e.g. Student prepping for DevOps & Kubernetes technical interviews..."
-                  value={reason}
-                  onChange={e => setReason(e.target.value)}
-                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-3 text-xs text-white placeholder-neutral-600 focus:outline-none focus:border-indigo-500 font-sans"
-                />
-              </div>
-
-              <div className="pt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setMode('sso_picker')}
-                  className="px-4 py-2 bg-neutral-800 hover:bg-neutral-750 text-neutral-300 rounded-xl text-xs font-semibold"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md transition-colors"
-                >
-                  Submit for Approval to mavbharath01@gmail.com
-                </button>
-              </div>
-            </form>
+              <button
+                onClick={handleGoogleSignIn}
+                disabled={isLoading}
+                className="w-full py-3 bg-white hover:bg-neutral-100 disabled:opacity-60 text-neutral-900 rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center gap-2.5"
+              >
+                {isLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-neutral-700" />
+                ) : (
+                  <GoogleLogoIcon className="w-4 h-4" />
+                )}
+                <span>{isLoading ? 'Authenticating...' : 'Continue with Google'}</span>
+              </button>
+            </div>
           )}
         </div>
       </div>

@@ -1,0 +1,478 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Authenticated user profile synchronized with Firebase Auth Google SSO",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 180
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "student"]
+        },
+        "isApproved": {
+          "type": "boolean"
+        },
+        "avatarUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "fullName", "email", "role", "isApproved", "createdAt", "updatedAt"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized platform administrator document",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 180
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "AccessRequest": {
+      "title": "AccessRequest",
+      "description": "Candidate enrollment and access approval request",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 180
+        },
+        "targetRole": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected"]
+        },
+        "approvedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "approvedBy": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "fullName", "email", "targetRole", "reason", "status", "createdAt", "updatedAt"]
+    },
+    "UserActivityLog": {
+      "title": "UserActivityLog",
+      "description": "Audit log of candidate and admin activity",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userEmail": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "userName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "action": {
+          "type": "string",
+          "enum": ["login", "mock_interview_start", "mock_interview_complete", "access_requested", "copilot_active"]
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "userEmail", "userName", "action", "description", "createdAt"]
+    },
+    "InterviewAttempt": {
+      "title": "InterviewAttempt",
+      "description": "Completed or in-progress mock interview attempt with rubric evaluation",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "candidateName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "track": {
+          "type": "string",
+          "enum": ["devops", "sre", "kubernetes", "platform", "behavioral"]
+        },
+        "seniority": {
+          "type": "string",
+          "enum": ["beginner", "intermediate", "senior", "staff", "mixed"]
+        },
+        "selectedTopics": {
+          "type": "array"
+        },
+        "startedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "endedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "questions": {
+          "type": "array"
+        },
+        "answers": {
+          "type": "array"
+        },
+        "overallScore": {
+          "type": "number"
+        },
+        "categoryScores": {
+          "type": "object"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["in_progress", "completed", "abandoned"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "candidateName",
+        "track",
+        "seniority",
+        "selectedTopics",
+        "startedAt",
+        "questions",
+        "answers",
+        "overallScore",
+        "categoryScores",
+        "passed",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserQuestionHistory": {
+      "title": "UserQuestionHistory",
+      "description": "Normalized question hashes asked per user to prevent repeat questions",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "questionHash": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "topic": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "askedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "questionHash", "topic", "askedAt"]
+    },
+    "UserInterviewStatus": {
+      "title": "UserInterviewStatus",
+      "description": "Persistent completion status and high-water score per user and topic set",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "candidateName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "topicSetKey": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Completed", "In Progress", "Not Started"]
+        },
+        "bestScore": {
+          "type": "number"
+        },
+        "latestScore": {
+          "type": "number"
+        },
+        "attemptCount": {
+          "type": "number"
+        },
+        "completedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "candidateName", "topicSetKey", "status", "bestScore", "latestScore", "attemptCount", "createdAt", "updatedAt"]
+    },
+    "InterviewSettings": {
+      "title": "InterviewSettings",
+      "description": "Global mock interview pass threshold and scoring weights configured by admin",
+      "type": "object",
+      "properties": {
+        "passThreshold": {
+          "type": "number"
+        },
+        "weights": {
+          "type": "object"
+        },
+        "defaultQuestionsPerSession": {
+          "type": "number"
+        },
+        "defaultTimePerAnswerSec": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["passThreshold", "weights", "defaultQuestionsPerSession", "defaultTimePerAnswerSec", "updatedAt"]
+    },
+    "ProctoredLiveFeed": {
+      "title": "ProctoredLiveFeed",
+      "description": "Real-time mock interview session telemetry visible to administrators",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "track": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "difficulty": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "startedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "currentQuestionIndex": {
+          "type": "number"
+        },
+        "totalQuestions": {
+          "type": "number"
+        },
+        "currentQuestion": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "currentTranscript": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "videoFrameDataUrl": {
+          "type": "string",
+          "maxLength": 200000
+        },
+        "isCameraActive": {
+          "type": "boolean"
+        },
+        "isAudioActive": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["live", "completed", "paused"]
+        },
+        "lastHeartbeat": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "sessionId",
+        "studentId",
+        "studentName",
+        "track",
+        "difficulty",
+        "startedAt",
+        "currentQuestionIndex",
+        "totalQuestions",
+        "currentQuestion",
+        "currentTranscript",
+        "isCameraActive",
+        "isAudioActive",
+        "status",
+        "lastHeartbeat",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles isolated by owner UID and admin access"
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Admin role registry"
+    },
+    "/access_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/AccessRequest" },
+      "description": "Candidate access approval requests"
+    },
+    "/user_activity_logs/{logId}": {
+      "schema": { "$ref": "#/entities/UserActivityLog" },
+      "description": "User activity audit logs"
+    },
+    "/interview_attempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/InterviewAttempt" },
+      "description": "Mock interview attempt records"
+    },
+    "/user_question_history/{historyId}": {
+      "schema": { "$ref": "#/entities/UserQuestionHistory" },
+      "description": "Per-user asked question hashes for no-repeat enforcement"
+    },
+    "/user_interview_status/{statusId}": {
+      "schema": { "$ref": "#/entities/UserInterviewStatus" },
+      "description": "Per-user topic-set completion status and high-water score"
+    },
+    "/interview_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/InterviewSettings" },
+      "description": "Global mock interview rubric weights and pass threshold"
+    },
+    "/proctored_feeds/{sessionId}": {
+      "schema": { "$ref": "#/entities/ProctoredLiveFeed" },
+      "description": "Live mock interview telemetry for admin review"
+    }
+  }
+}

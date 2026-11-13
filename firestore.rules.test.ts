@@ -1,0 +1,106 @@
+/**
+ * Firestore Security Rules Test Specification (Dirty Dozen Adversarial Suite)
+ * Verifies identity, PII isolation, privilege escalation prevention, and invariant enforcement.
+ */
+
+export const DIRTY_DOZEN_PAYLOADS = [
+  {
+    name: '1. Unauthenticated PII Read',
+    auth: null,
+    operation: 'get',
+    path: '/users/student_a',
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '2. Cross-User PII Read',
+    auth: { uid: 'student_b', email: 'b@gmail.com', email_verified: true },
+    operation: 'get',
+    path: '/users/student_a',
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '3. Self-Admin Escalation on Create',
+    auth: { uid: 'student_b', email: 'b@gmail.com', email_verified: true },
+    operation: 'create',
+    path: '/users/student_b',
+    data: {
+      uid: 'student_b',
+      fullName: 'Attacker',
+      email: 'b@gmail.com',
+      role: 'admin',
+      isApproved: true,
+    },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '4. Self-Approval Escalation on Update',
+    auth: { uid: 'student_b', email: 'b@gmail.com', email_verified: true },
+    operation: 'update',
+    path: '/users/student_b',
+    data: { isApproved: true },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '5. Shadow Field Injection on Attempt',
+    auth: { uid: 'student_a', email: 'a@gmail.com', email_verified: true },
+    operation: 'create',
+    path: '/interview_attempts/attempt_1',
+    data: { id: 'attempt_1', userId: 'student_a', shadowFlag: true },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '6. Spoofed UserId on Attempt',
+    auth: { uid: 'student_b', email: 'b@gmail.com', email_verified: true },
+    operation: 'create',
+    path: '/interview_attempts/attempt_2',
+    data: { id: 'attempt_2', userId: 'student_a' },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '7. Client-Forged Timestamp',
+    auth: { uid: 'student_a', email: 'a@gmail.com', email_verified: true },
+    operation: 'create',
+    path: '/user_activity_logs/log_1',
+    data: { id: 'log_1', userId: 'student_a', createdAt: '2020-01-01T00:00:00Z' },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '8. Mutating Completed Attempt',
+    auth: { uid: 'student_a', email: 'a@gmail.com', email_verified: true },
+    operation: 'update',
+    path: '/interview_attempts/completed_attempt',
+    data: { overallScore: 100 },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '9. Revoking Completed Status',
+    auth: { uid: 'student_a', email: 'a@gmail.com', email_verified: true },
+    operation: 'update',
+    path: '/user_interview_status/status_1',
+    data: { status: 'In Progress', bestScore: 40 },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '10. Non-Admin Settings Tampering',
+    auth: { uid: 'student_a', email: 'a@gmail.com', email_verified: true },
+    operation: 'update',
+    path: '/interview_settings/global',
+    data: { passThreshold: 10 },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '11. Unverified Email Spoofing',
+    auth: { uid: 'attacker', email: 'mavbharath01@gmail.com', email_verified: false },
+    operation: 'list',
+    path: '/users',
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    name: '12. ID Poisoning / Oversized Document ID',
+    auth: { uid: 'student_a', email: 'a@gmail.com', email_verified: true },
+    operation: 'create',
+    path: `/user_question_history/${'x'.repeat(300)}`,
+    data: { id: 'x'.repeat(300), userId: 'student_a', questionHash: 'h1', topic: 'Linux' },
+    expected: 'PERMISSION_DENIED',
+  },
+];

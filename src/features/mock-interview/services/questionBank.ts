@@ -516,10 +516,11 @@ export class QuestionBankService {
     userId: string,
     selectedTopics: ToolTopic[],
     difficulty: SeniorityLevel,
-    count: number = 10
+    count: number = 10,
+    extraHashes: string[] = []
   ): InterviewQuestion[] {
     const userHistory = this.getUserQuestionHistory(userId);
-    const historySet = new Set(userHistory);
+    const historySet = new Set([...userHistory, ...extraHashes]);
 
     // Filter available pool strictly matching selected topics
     const matching = RAW_QUESTIONS.filter(q => selectedTopics.includes(q.topic));
@@ -585,6 +586,64 @@ export class QuestionBankService {
     return selected;
   }
 
+  /**
+   * Generates fresh, non-repeating questions via server-side Gemini API,
+   * using user_question_history from Firestore + localStorage as exclusion list,
+   * and falls back seamlessly to the seeded question bank if API is unavailable.
+   */
+  public async generateQuestionsWithFallback(
+    userId: string,
+    selectedTopics: ToolTopic[],
+    difficulty: SeniorityLevel,
+    count: number = 10,
+    remoteHistoryHashes: string[] = []
+  ): Promise<{ questions: InterviewQuestion[]; source: 'gemini' | 'bank' }> {
+    const localHashes = this.getUserQuestionHistory(userId);
+    const mergedHashes = Array.from(new Set([...localHashes, ...remoteHistoryHashes]));
+    const excludeQuestions = this.getAskedQuestionTexts(userId);
+
+    try {
+      const res = await fetch('/api/mock-interview/questions/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          selectedTopics,
+          difficulty,
+          count,
+          excludeHashes: mergedHashes,
+          excludeQuestions,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.questions) && data.questions.length > 0) {
+          const generated: InterviewQuestion[] = data.questions.slice(0, count);
+          this.recordQuestionsAsked(userId, generated.map(q => q.hash));
+          this.recordAskedQuestionTexts(userId, generated.map(q => q.question));
+          return { questions: generated, source: 'gemini' };
+        }
+      }
+    } catch {
+      // Fallback to seeded local question bank below
+    }
+
+    const bankQuestions = this.getQuestionsForSession(userId, selectedTopics, difficulty, count, mergedHashes);
+    this.recordAskedQuestionTexts(userId, bankQuestions.map(q => q.question));
+    return { questions: bankQuestions, source: 'bank' };
+  }
+
+  public getQuestionsForSessionWithHistory(
+    userId: string,
+    selectedTopics: ToolTopic[],
+    difficulty: SeniorityLevel,
+    count: number = 10,
+    extraHashes: string[] = []
+  ): InterviewQuestion[] {
+    return this.getQuestionsForSession(userId, selectedTopics, difficulty, count, extraHashes);
+  }
+
   public getUserQuestionHistory(userId: string): string[] {
     try {
       const raw = localStorage.getItem(`maverick_user_qhistory_${userId}`);
@@ -599,6 +658,25 @@ export class QuestionBankService {
       const current = this.getUserQuestionHistory(userId);
       const updated = Array.from(new Set([...current, ...hashes]));
       localStorage.setItem(`maverick_user_qhistory_${userId}`, JSON.stringify(updated));
+    } catch {
+      // Storage unavailable
+    }
+  }
+
+  private getAskedQuestionTexts(userId: string): string[] {
+    try {
+      const raw = localStorage.getItem(`maverick_user_qtexts_${userId}`);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private recordAskedQuestionTexts(userId: string, texts: string[]) {
+    try {
+      const current = this.getAskedQuestionTexts(userId);
+      const updated = Array.from(new Set([...texts, ...current])).slice(0, 60);
+      localStorage.setItem(`maverick_user_qtexts_${userId}`, JSON.stringify(updated));
     } catch {
       // Storage unavailable
     }

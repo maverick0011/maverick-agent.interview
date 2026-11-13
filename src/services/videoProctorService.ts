@@ -89,7 +89,7 @@ class VideoProctorService {
         currentQuestionIndex: params.currentQuestionIndex,
         totalQuestions: params.totalQuestions,
         currentQuestion: params.currentQuestion,
-        currentTranscript: 'Candidate is explaining Kubernetes control plane architecture...',
+        currentTranscript: 'Session initialized — waiting for candidate response...',
         videoFrameDataUrl: snapshotDataUrl,
         isCameraActive: !!this.mediaStream && this.mediaStream.active,
         isAudioActive: true,

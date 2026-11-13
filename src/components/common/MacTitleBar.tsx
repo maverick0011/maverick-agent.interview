@@ -123,17 +123,15 @@ export const MacTitleBar: React.FC<MacTitleBarProps> = ({
 
       {/* Zone 3: Quick Utilities + User Profile & Admin Trigger + Windows controls */}
       <div className="flex items-center gap-2">
-        {/* Google SSO User Profile button */}
+        {/* Google Account Profile button */}
         <button
           onClick={onOpenAuth}
           className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors ${
             currentUser.role === 'admin'
               ? 'bg-amber-950/40 border-amber-500/50 text-amber-300'
-              : currentUser.isApproved
-              ? 'bg-neutral-900 border-neutral-800 text-neutral-200 hover:text-white'
-              : 'bg-rose-950/40 border-rose-600/50 text-rose-300 animate-pulse'
+              : 'bg-neutral-900 border-neutral-800 text-neutral-200 hover:text-white'
           }`}
-          title="Google SSO Account & Permissions"
+          title="Google Account & Profile"
         >
           {currentUser.role === 'admin' ? (
             <Lock className="w-3.5 h-3.5 text-amber-400" />
@@ -143,20 +141,17 @@ export const MacTitleBar: React.FC<MacTitleBarProps> = ({
           <span className="max-w-[130px] truncate">
             {currentUser.role === 'admin' ? 'Admin: ' : ''}{currentUser.fullName}
           </span>
-          {!currentUser.isApproved && (
-            <span className="text-[10px] text-amber-400 font-mono">(Pending)</span>
-          )}
         </button>
 
-        {/* If Admin (mavbharath01@gmail.com), Show Admin Live Assessment & User Activity Trigger */}
+        {/* Admin Dashboard Trigger */}
         {currentUser.role === 'admin' && (
           <button
             onClick={onOpenAdmin}
             className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-black rounded-md shadow-sm transition-colors"
-            title="Admin Command Center: Live Video Assessment & User Activity (mavbharath01@gmail.com only)"
+            title="Admin Command Center: Assessments & Candidate Activity"
           >
             <ShieldCheck className="w-3.5 h-3.5 text-black" />
-            <span>Admin Assessment</span>
+            <span>Admin Dashboard</span>
           </button>
         )}
 
