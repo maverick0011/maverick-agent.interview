@@ -1,0 +1,36 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function isAdmin() { return signedIn() && request.auth.token.email == 'mavbharath01@gmail.com'; }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      // A user can only create their own pending candidate profile. The admin identity
+      // is derived from the verified token email, not a browser-supplied role.
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.email == request.auth.token.email
+        && ((isAdmin() && request.resource.data.role == 'admin' && request.resource.data.status == 'approved')
+          || (!isAdmin() && request.resource.data.role == 'candidate' && request.resource.data.status == 'pending'));
+      allow update: if isAdmin()
+        || (signedIn() && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL'])
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.status == resource.data.status);
+      allow delete: if isAdmin();
+    }
+
+    match /accessRequests/{requestId} {
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.status == 'pending';
+      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // Add explicit per-collection rules before introducing any other cloud data.
+    match /{document=**} { allow read, write: if false; }
+  }
+}

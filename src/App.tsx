@@ -72,7 +72,7 @@ export default function App() {
         onOpenModelDoctor={() => setIsDoctorOpen(true)}
         onOpenWizard={() => setShowWizard(true)}
         onOpenAuth={() => setIsAuthOpen(true)}
-        onOpenAdmin={() => setIsAdminOpen(true)}
+        onOpenAdmin={() => { if (currentUser.role === 'admin') setIsAdminOpen(true); }}
         isFloatingOpen={isFloatingOpen}
         currentUser={currentUser}
       />
@@ -154,11 +154,8 @@ export default function App() {
         onUserChanged={handleUserChanged}
       />
 
-      {/* Admin Command Center (Candidate Approval & Live Proctored Feeds) */}
-      <AdminDashboardModal
-        isOpen={isAdminOpen}
-        onClose={() => setIsAdminOpen(false)}
-      />
+      {/* Admin Command Center is only mounted for the verified administrator. */}
+      {currentUser.role === 'admin' && <AdminDashboardModal isOpen={isAdminOpen} onClose={() => setIsAdminOpen(false)} />}
     </div>
   );
 }

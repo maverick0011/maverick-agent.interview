@@ -37,8 +37,6 @@ const STORAGE_KEYS = {
 
 export const ADMIN_EMAILS: string[] = [
   'mavbharath01@gmail.com',
-  'bharath.hkumar51@gmail.com',
-  'admin@cloudnativeacademy.in',
 ];
 
 export function isAdminEmail(email?: string): boolean {
@@ -55,77 +53,6 @@ export interface UserActivityLog {
   description: string;
   timestamp: string;
 }
-
-export const DEFAULT_ADMIN_USER: UserProfile = {
-  id: 'user-admin-bharath',
-  fullName: 'Bharath H Kumar',
-  email: 'mavbharath01@gmail.com',
-  role: 'admin',
-  isApproved: true,
-  avatarUrl: 'https://lh3.googleusercontent.com/a/default-user',
-};
-
-export const DEFAULT_STUDENT_USER: UserProfile = {
-  id: 'user-student-alex',
-  fullName: 'Alex Mercer',
-  email: 'alex.mercer@gmail.com',
-  role: 'student',
-  isApproved: true,
-  avatarUrl: 'https://lh3.googleusercontent.com/a/default-user',
-};
-
-const INITIAL_ACCESS_REQUESTS: AccessRequest[] = [
-  {
-    id: 'req-01',
-    fullName: 'Rahul Sharma',
-    email: 'rahul.sharma@gmail.com',
-    targetRole: 'DevOps Engineer',
-    reason: 'Enrolled in Cloud Native Academy Master Cohort 2026. Requesting mock interview simulator access.',
-    status: 'pending',
-    createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-  },
-  {
-    id: 'req-02',
-    fullName: 'Priya Patel',
-    email: 'priya.patel@gmail.com',
-    targetRole: 'SRE & Kubernetes Architect',
-    reason: 'Prepping for Staff SRE interviews next week.',
-    status: 'approved',
-    createdAt: new Date(Date.now() - 86400000 * 1).toISOString(),
-    approvedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-    approvedBy: 'mavbharath01@gmail.com',
-  },
-];
-
-const INITIAL_ACTIVITY_LOGS: UserActivityLog[] = [
-  {
-    id: 'act-01',
-    userId: 'user-student-alex',
-    userEmail: 'alex.mercer@gmail.com',
-    userName: 'Alex Mercer',
-    action: 'mock_interview_complete',
-    description: 'Completed DevOps Senior Mock Interview (Scored 88% - Passed)',
-    timestamp: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
-  },
-  {
-    id: 'act-02',
-    userId: 'user-sumanth',
-    userEmail: 'sumanth.rao@gmail.com',
-    userName: 'Sumanth Rao',
-    action: 'mock_interview_start',
-    description: 'Started Kubernetes Specialist Mock Interview (Live Video Active)',
-    timestamp: new Date(Date.now() - 1000 * 60 * 7).toISOString(),
-  },
-  {
-    id: 'act-03',
-    userId: 'user-priya',
-    userEmail: 'priya.patel@gmail.com',
-    userName: 'Priya Patel',
-    action: 'login',
-    description: 'Logged in via Google SSO (OAuth Verified)',
-    timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
-  },
-];
 
 class LocalStorageDB {
   private get<T>(key: string, defaultValue: T): T {
@@ -335,7 +262,7 @@ class LocalStorageDB {
 
   // --- User Authentication & Access Control ---
   getCurrentUser(): UserProfile {
-    return this.get<UserProfile>(STORAGE_KEYS.CURRENT_USER, DEFAULT_STUDENT_USER);
+    return this.get<UserProfile | null>(STORAGE_KEYS.CURRENT_USER, null) as UserProfile;
   }
 
   setCurrentUser(user: UserProfile): void {
@@ -343,7 +270,7 @@ class LocalStorageDB {
   }
 
   getAccessRequests(): AccessRequest[] {
-    return this.get<AccessRequest[]>(STORAGE_KEYS.ACCESS_REQUESTS, INITIAL_ACCESS_REQUESTS);
+    return this.get<AccessRequest[]>(STORAGE_KEYS.ACCESS_REQUESTS, []);
   }
 
   submitAccessRequest(data: Omit<AccessRequest, 'id' | 'createdAt' | 'status'>): AccessRequest {
@@ -387,7 +314,7 @@ class LocalStorageDB {
 
   // --- User Activity Logging (Visible to mavbharath01@gmail.com) ---
   getUserActivityLogs(): UserActivityLog[] {
-    return this.get<UserActivityLog[]>(STORAGE_KEYS.USER_ACTIVITY_LOGS, INITIAL_ACTIVITY_LOGS);
+    return this.get<UserActivityLog[]>(STORAGE_KEYS.USER_ACTIVITY_LOGS, []);
   }
 
   logUserActivity(log: Omit<UserActivityLog, 'id' | 'timestamp'>): void {
